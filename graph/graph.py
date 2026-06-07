@@ -1,6 +1,6 @@
 from graph.state import GraphState
 from nodes import researcher_node, writer_node, enforcer_node, deployer_node
-from search import SearchPort
+from search import TavilySearch
 from brand_rag import BrandRAG
 from learning_memory import FeedbackPortSQL
 from brand_metrics import BrandMetricsSQL
@@ -8,7 +8,7 @@ from langgraph.graph import StateGraph, END
 from functools import partial
 
 def build_graph(
-    search: SearchPort,
+    search: TavilySearch,
     rag: BrandRAG,
     analyzer: BrandMetricsSQL,
     memory: FeedbackPortSQL,

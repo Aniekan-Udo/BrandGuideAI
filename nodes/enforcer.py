@@ -9,13 +9,24 @@ from graph.state import GraphState
 logger = logging.getLogger(__name__)
 
 from utils.observe import observe
-@observe("researcher_node")
-def enforcer_node(state: GraphState, analyzer: BrandMetricsSQL) -> GraphState:
-    content = state["content"]
-    metrics = analyzer.get_context()
-    iteration = state.get("iteration", 1)
-    max_iterations = 3
 
+
+def _parse_llm_json(raw: str) -> dict:
+    """Strip markdown fences and parse JSON from LLM output."""
+    raw = raw.strip()
+    if raw.startswith("```"):
+        raw = raw.split("```")[1]
+        if raw.startswith("json"):
+            raw = raw[4:]
+    return json.loads(raw.strip())
+
+
+@observe("enforcer_node")
+def enforcer_node(state: GraphState, analyzer: BrandMetricsSQL) -> GraphState:
+    content       = state["content"]
+    metrics       = analyzer.get_context()
+    iteration     = state.get("iteration", 1)
+    max_iterations = 3
 
     result = LLMSingleton.get().invoke(
         ENFORCER_PROMPT.format(
@@ -25,7 +36,7 @@ def enforcer_node(state: GraphState, analyzer: BrandMetricsSQL) -> GraphState:
     )
 
     try:
-        evaluation = json.loads(result.content)
+        evaluation = _parse_llm_json(result.content)
     except Exception:
         logger.error("Failed to parse enforcer output, defaulting to approve")
         evaluation = {
@@ -39,6 +50,25 @@ def enforcer_node(state: GraphState, analyzer: BrandMetricsSQL) -> GraphState:
             "creative_angle": "unknown"
         }
 
+    # Force a revision cycle if score is below threshold and iterations remain
+    # This prevents the enforcer from rubber-stamping weak first drafts
+    MIN_SCORE = 7.5
+    if evaluation.get("score", 0.0) < MIN_SCORE and iteration < max_iterations:
+        logger.info(
+            "Score %.1f below threshold %.1f at iteration %d — forcing revision",
+            evaluation["score"], MIN_SCORE, iteration
+        )
+        evaluation["approved"] = False
+        # Ensure feedback is populated so the writer knows what to fix
+        if not evaluation.get("feedback"):
+            evaluation["feedback"] = (
+                "Content does not sufficiently match the brand voice. "
+                "Focus on: anchoring claims to brand experience with specific data, "
+                "using first-person plural (we/our), matching the brand's opening and closing patterns, "
+                "and weaving in signature phrases naturally."
+            )
+
+    # Hard cap — approve at max iterations regardless of score
     if not evaluation["approved"] and iteration >= max_iterations:
         logger.warning("Max iterations reached, forcing approval")
         evaluation["approved"] = True

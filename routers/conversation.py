@@ -1,7 +1,7 @@
 from contextlib import asynccontextmanager
 from fastapi import Depends, Request, File
 from fastapi.responses import JSONResponse
-
+import asyncio
 
 from uuid import uuid4
 
@@ -19,58 +19,48 @@ from schema import GenerateRequest, FeedbackRequest, TaskResponse
 
 
 
-
-
-
 @router.post("/generate/stream")
 @limiter.limit("60/minute")
 async def generate_stream(request: Request, body: GenerateRequest):
     from celery_task import generate_content
     from database import get_db_session, Generation
+    from redis.asyncio import Redis as AsyncRedis
 
-    redis_client = request.app.state.redis
     generation_id = str(uuid4())
 
-    with get_db_session() as session:
-        record = Generation(
-            generation_id=generation_id,
-            business_id=body.business_id,
-            content_type=body.content_type,
-            topic=body.topic,
-            format_type=body.format_type,
-            user_id=body.user_id,
-            status="pending"
-        )
-        session.add(record)
-
+    
     generate_content.delay(
         generation_id=generation_id,
         business_id=body.business_id,
         content_type=body.content_type,
         topic=body.topic,
         format_type=body.format_type,
-        user_id=body.user_id
+        user_id=body.user_id,
+        use_search=body.use_search,  
     )
 
     async def stream():
         yield json.dumps({"generation_id": generation_id}) + "\n"
 
         
+        async_redis = AsyncRedis(
+            host="redis",
+            port=6379,
+            decode_responses=True,
+            socket_timeout=15,          
+            socket_connect_timeout=5
+        )
         start = time.monotonic()
         MAX_STREAM_SECONDS = 300
 
         while True:
             if await request.is_disconnected():
                 break
-
             if time.monotonic() - start > MAX_STREAM_SECONDS:
-                logger.warning(
-                    "Stream timed out after %ds generation_id=%s",
-                    MAX_STREAM_SECONDS, generation_id
-                )
+                logger.warning("Stream timed out generation_id=%s", generation_id)
                 break
 
-            chunk = redis_client.blpop(f"stream:{generation_id}", timeout=5)
+            chunk = await async_redis.blpop(f"stream:{generation_id}", timeout=10)  
 
             if chunk is None:
                 with get_db_session() as session:
@@ -82,8 +72,6 @@ async def generate_stream(request: Request, body: GenerateRequest):
             yield chunk[1]
 
     return StreamingResponse(stream(), media_type="application/json")
-
-
 
 
 @router.post("/feedback", response_model=TaskResponse)
@@ -105,7 +93,7 @@ async def submit_feedback(request: FeedbackRequest, req: Request):
         task.id, request.generation_id, request.human_approved
     )
 
-    return {"task_id": task.id, "status": "queued"}
+    return {"generation_id": request.generation_id, "task_id": task.id, "status": "queued"}
 
 
 @router.get("/health")

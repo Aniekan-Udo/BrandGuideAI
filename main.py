@@ -6,7 +6,8 @@ from fastapi import FastAPI
 import redis
 from model import LLMSingleton
 from limiter import limiter, RateLimitExceeded
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, FileResponse
+from fastapi.staticfiles import StaticFiles
 load_dotenv()
 logging.basicConfig(
     level=logging.INFO,
@@ -26,14 +27,14 @@ async def lifespan(app: FastAPI):
     init_db()
     app.state.llm = LLMSingleton().get()
     app.state.redis = redis.Redis(host="redis", port=6379, decode_responses=True, socket_timeout=10, socket_connect_timeout=10)
-    logger.info("BrandGuard AI started successfully")
+    logger.info("BrandMuse AI started successfully")
     yield
     engine.dispose()
-    logger.info("Shutting down BrandGuard AI...")
+    logger.info("Shutting down BrandMuse AI...")
 
 
 app = FastAPI(
-    title="BrandGuard AI",
+    title="BrandMuse AI",
     description="Brand voice content generation API",
     version="1.0.0",
     lifespan=lifespan
@@ -43,7 +44,15 @@ from fastapi.middleware.cors import CORSMiddleware
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["https://brandguard.com"],
+    allow_origins=[
+        "https://brandguard.com",
+        "http://localhost:8000",
+        "http://127.0.0.1:8000",
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+        "http://localhost:5173",
+        "http://127.0.0.1:5173"
+    ],
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "DELETE"],
     allow_headers=["Authorization", "Content-Type"],
@@ -58,6 +67,18 @@ from routers import users, conversation, document
 app.include_router(users.router, prefix="/users", tags=["Users"])
 app.include_router(conversation.router, prefix="/conversation", tags=["Conversation"])
 app.include_router(document.router, prefix="/documents", tags=["Documents"])
+
+# Serve frontend static assets and routes
+app.mount("/static", StaticFiles(directory="static"), name="static")
+
+@app.get("/")
+async def serve_landing():
+    return FileResponse("static/landing.html")
+
+@app.get("/console")
+async def serve_index():
+    return FileResponse("static/index.html")
+
 @app.get("/health", tags=["Health"])
 async def health_check():
     return {"status": "ok"}

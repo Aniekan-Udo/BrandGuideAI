@@ -1,19 +1,27 @@
 
-from celery import group
-from fastapi import HTTPException, Depends, Request
+from fastapi import HTTPException, Depends, Request, Form, File, UploadFile
 from sqlalchemy.orm import Session
 from database import get_db
-from schema import DocumentUploadRequest, TaskResponse
-from typing import Annotated
-from fastapi import UploadFile, File
+from schema import TaskResponse
+from typing import Annotated, Optional
 from fastapi import APIRouter
 from limiter import limiter
-router = APIRouter()
 from utils import create_idempotency_key, logger
+from celery import group
+
+router = APIRouter()
 
 @router.post("/documents/top-performing", response_model=TaskResponse)
 @limiter.limit("20/minute")
-async def upload(request: Request, body: DocumentUploadRequest, db: Annotated[Session, Depends(get_db)], file: UploadFile = File(...)):
+async def upload(
+    request: Request,
+    db: Annotated[Session, Depends(get_db)],
+    business_id: str = Form(...),
+    content_type: str = Form(...),
+    platform: Optional[str] = Form(None),
+    performance_metric: Optional[str] = Form(None),
+    file: UploadFile = File(...)
+):
     from celery_task import refresh_rag, extract_metrics
     from database import BrandDocument
 
@@ -33,15 +41,25 @@ async def upload(request: Request, body: DocumentUploadRequest, db: Annotated[Se
     if len(doc_content) > 100000:  # Arbitrary limit of ~100k characters
         raise HTTPException(status_code=400, detail="File is too large")
 
-    _idempotency_key = f"{request.business_id}:{create_idempotency_key(file_content)}"
-    if app.state.redis.exists(_idempotency_key):
+    _idempotency_key = f"{business_id}:{create_idempotency_key(file_content)}"
+    if request.app.state.redis.exists(_idempotency_key):
         raise HTTPException(status_code=409, detail="File already processed")
 
+    # Get user_id from business_id to associate document with user
+    from database import User
+    try:
+        user = db.query(User).filter(User.business_id == business_id).first()
+        if not user:
+            raise HTTPException(status_code=404, detail="Business ID not found")
+        user_id = user.id
+    except Exception as e:
+        logger.error("Error fetching user for document upload: %s", e)
+        raise HTTPException(status_code=500, detail="Internal server error")
 
-    
     doc = BrandDocument(
-        business_id=body.business_id,
-        content_type=body.content_type,
+        user_id=user_id,
+        business_id=business_id,
+        content_type=content_type,
         file_content=doc_content,
         filename=file.filename or "upload",
     )
@@ -55,12 +73,12 @@ async def upload(request: Request, body: DocumentUploadRequest, db: Annotated[Se
         logger.error("Database error while saving document: %s", e)
         raise HTTPException(status_code=500, detail="Failed to save document")
 
-
     task_group = group(
-        refresh_rag.s(business_id=body.business_id, content_type=body.content_type, new_doc_content=doc_content),
-        extract_metrics.s(business_id=body.business_id, content_type=body.content_type, doc_id=doc_id, doc_content=doc_content)
+        refresh_rag.s(business_id=business_id, content_type=content_type, new_doc_content=doc_content),
+        extract_metrics.s(business_id=business_id, content_type=content_type, doc_id=doc_id, doc_content=doc_content)
     )
     result = task_group.delay()
-    app.state.redis.set(_idempotency_key, "processing", ex=86400)
+    request.app.state.redis.set(_idempotency_key, "processing", ex=86400)
 
-    return {"task_id": result.id, "status": "queued"}
+    # Return required generation_id along with task_id and status to satisfy TaskResponse schema
+    return {"generation_id": "", "task_id": result.id, "status": "queued"}
