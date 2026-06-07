@@ -22,6 +22,12 @@ celery_app = Celery(
     broker=os.getenv("RABBIT_URL", "amqp://guest:guest@rabbitmq:5672//"),
     backend=os.getenv("REDIS_URL", "redis://redis:6379/0")
 )
+
+
+from kombu import Queue, Exchange
+
+rag_exchange = Exchange("rag_refresh", type="direct")
+
 celery_app.conf.update(
     task_serializer="json",
     result_serializer="json",
@@ -30,20 +36,21 @@ celery_app.conf.update(
     task_acks_late=True, 
     task_reject_on_worker_lost=True,
     task_queues=[
-        Queue("generation", durable=True),
-        Queue("feedback", durable=True),
-        Queue("retraining", durable=True),
-        Queue("rag_refresh", durable=True),
+        Queue("generation",  durable=True, exchange=Exchange("generation",  type="direct"), routing_key="generation"),
+        Queue("feedback",    durable=True, exchange=Exchange("feedback",    type="direct"), routing_key="feedback"),
+        Queue("retraining",  durable=True, exchange=Exchange("retraining",  type="direct"), routing_key="retraining"),
+        Queue("rag_refresh", durable=True, exchange=Exchange("rag_refresh", type="direct"), routing_key="rag_refresh"), 
     ],
     task_default_queue="generation",
     task_routes={
-        "tasks.generate_content":    {"queue": "generation"},
-        "tasks.process_feedback":    {"queue": "feedback"},
-        "tasks.retrain":             {"queue": "retraining"},
-        "tasks.refresh_rag":         {"queue": "rag_refresh"},
+        "tasks.generate_content":            {"queue": "generation"},
+        "tasks.process_feedback":            {"queue": "feedback"},
+        "tasks.retrain":                     {"queue": "retraining"},
+        "tasks.refresh_rag":                 {"queue": "rag_refresh"},
+        "tasks.extract_metrics":             {"queue": "rag_refresh"},  
+        "tasks.promote_generation_feedback": {"queue": "rag_refresh"},  
     }
 )
-
 
 def get_redis():
     return redis.Redis(host="redis", port=6379, decode_responses=True)
@@ -69,7 +76,8 @@ def generate_content(
     content_type: str,
     topic: str,
     format_type: str,
-    user_id: int = None
+    user_id: int = None,
+    use_search: bool = False
 ):
     from brand_rag import BrandRAG, FastEmbedEmbedding
     from brand_metrics import BrandMetricsSQL
@@ -90,6 +98,7 @@ def generate_content(
             topic=topic,
             format_type=format_type,
             user_id=user_id,
+            use_search=use_search,   
             research="",
             content="",
             creative_angle="",
@@ -325,8 +334,7 @@ def refresh_rag(self, business_id, content_type, new_doc_content):
             content_type=content_type
         )
         rag.refresh(new_doc_content)
-        analyzer.invalidate(new_doc_content)
-
+        analyzer.invalidate_cache()
         logger.info(
             "RAG refresh complete business_id=%s content_type=%s",
             business_id, content_type

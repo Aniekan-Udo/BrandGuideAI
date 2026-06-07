@@ -1,7 +1,7 @@
 # nodes/researcher.py
 import logging
 from model import LLMSingleton
-from search import SearchPort
+from search import TavilySearch
 from brand_rag import BrandRAG
 from prompts.researcher import RESEARCH_SUMMARY
 from graph.state import GraphState
@@ -9,7 +9,7 @@ from graph.state import GraphState
 logger = logging.getLogger(__name__)
 from utils.observe import observe
 @observe("researcher_node")
-def researcher_node(state: GraphState, search: SearchPort, rag: BrandRAG) -> GraphState:
+def researcher_node(state: GraphState, search: TavilySearch, rag: BrandRAG) -> GraphState:
     """
     Retrieves research context for content generation.
 

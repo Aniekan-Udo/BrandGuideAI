@@ -5,11 +5,25 @@ from sqlalchemy.orm import Session
 from database import get_db, User
 from auth import verify_password, create_access_token, hash_password
 from schema import UserCreate, UserResponse
-from main import limiter
+from limiter import limiter
 from utils import logger
 from starlette.requests import Request
+from auth import verify_token, oauth2_scheme
 
 router = APIRouter()
+
+@router.get("/me", response_model=UserResponse)
+async def get_me(db: Annotated[Session, Depends(get_db)], token: Annotated[str, Depends(oauth2_scheme)]):
+    user_id = verify_token(token)
+    try:
+        user = db.query(User).filter(User.id == int(user_id)).first()
+    except Exception as e:
+        logger.error("Database error during user look up: %s", e)
+        raise HTTPException(status_code=500, detail="Internal server error")
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    return user
+
 
 @router.post("/create", response_model=UserResponse, status_code=201)
 @limiter.limit("2/minute")

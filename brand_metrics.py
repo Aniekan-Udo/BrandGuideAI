@@ -121,7 +121,12 @@ class BrandMetricsSQL(MetricPort):
         )
 
         try:
-            extracted = json.loads(result.content)
+            raw = result.content.strip()
+            if raw.startswith("```"):
+                raw = raw.split("```")[1]
+                if raw.startswith("json"):
+                    raw = raw[4:]
+            extracted = json.loads(raw.strip())
         except json.JSONDecodeError:
             logger.error("Extraction LLM returned invalid JSON — skipping persist")
             return False
@@ -191,9 +196,14 @@ class BrandMetricsSQL(MetricPort):
         )
 
         try:
-            extracted = json.loads(result.content)
+            raw = result.content.strip()
+            if raw.startswith("```"):
+                raw = raw.split("```")[1]
+                if raw.startswith("json"):
+                    raw = raw[4:]
+            extracted = json.loads(raw.strip())
         except json.JSONDecodeError:
-            logger.error("Extraction LLM returned invalid JSON for generation feedback")
+            logger.error("Extraction LLM returned invalid JSON — skipping persist")
             return False
 
         try:
@@ -328,11 +338,8 @@ class BrandMetricsSQL(MetricPort):
                 self._redis.set(self._cache_key, brain.synthesis_text, ex=CACHE_TTL)
                 return brain.synthesis_text
         
-        # 3. Cold start — build from raw profiles
+        
         return self.build_and_cache_context()
-    # ------------------------------------------------------------------ #
-    #  Maintenance                                                         #
-    # ------------------------------------------------------------------ #
 
     def invalidate_cache(self):
         """Force Redis cache eviction — next get_context() will rebuild."""

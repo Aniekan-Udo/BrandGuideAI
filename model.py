@@ -176,6 +176,65 @@ class ChatOpenAI(LLMModel):
         return f"ChatOpenAI(model='{self.model}', temp={self.temperature})"
 
 
+
+class ChatOllama(LLMModel):
+    def __init__(
+        self,
+        model: str = "mistral:7b",
+        base_url: str = "http://localhost:11434",
+        temperature: float = 0.7,
+        max_tokens: int = 8192,
+        top_p: float = 1.0
+    ):
+        self._model = model
+        self._base_url = base_url
+        self._temperature = temperature
+        self._max_tokens = max_tokens
+        self._top_p = top_p
+
+    @property
+    def source(self) -> str:
+        return "ChatOllama"
+
+    @property
+    def model(self) -> str:
+        return self._model
+
+    @property
+    def api_key(self) -> str:
+        return ""
+
+    @property
+    def temperature(self) -> float:
+        return self._temperature
+
+    @property
+    def max_tokens(self) -> int:
+        return self._max_tokens
+
+    @property
+    def top_p(self) -> float:
+        return self._top_p
+
+    def to_params(self):
+        return {
+            "model": self.model,
+            "temperature": self.temperature,
+            "max_tokens": self.max_tokens,
+        }
+
+    def to_langchain(self):
+        from langchain_ollama import ChatOllama as LangChainOllama
+        return LangChainOllama(
+            model=self._model,
+            base_url=self._base_url,
+            temperature=self._temperature,
+            num_predict=self._max_tokens
+        )
+
+    def __repr__(self) -> str:
+        return f"ChatOllama(model='{self.model}', temp={self.temperature})"
+
 # Singleton for LLMs
 class LLMSingleton:
     _instance = None

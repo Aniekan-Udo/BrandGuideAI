@@ -31,7 +31,7 @@ from deepeval.models import DeepEvalBaseLLM
 # ── App imports (root on sys.path via conftest.py) ────────────────────────────
 from model import ChatGroq as AppChatGroq
 from graph.graph import build_graph
-from search import SearchPort
+from search import TavilySearch
 from brand_rag import BrandRAG
 from brand_metrics import BrandMetricsSQL
 from learning_memory import FeedbackPortSQL
@@ -129,7 +129,7 @@ BRAND_METRICS_JSON = """{
 
 
 def _mock_search() -> MagicMock:
-    s = MagicMock(spec=SearchPort)
+    s = MagicMock(spec=TavilySearch)
     s.search.return_value = (
         "Consumer research 2024: 78 % of shoppers say brand authenticity "
         "influences purchase decisions. Sustainability messaging lifts "

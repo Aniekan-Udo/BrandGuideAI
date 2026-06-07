@@ -53,6 +53,7 @@ class UserResponse(BaseModel):
     last_name: str
     username: str
     email: str
+    business_id: str
 
     class Config:
         from_attributes = True

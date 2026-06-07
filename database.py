@@ -281,7 +281,7 @@ class ReviewerLearning(Model):
     id: Mapped[int] = mapped_column(primary_key=True)
     generation_id: Mapped[str] = mapped_column(String(100), unique=True, nullable=False, index=True)
     business_id: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
-    user_id: Mapped[int] = mapped_column(ForeignKey('users.id', ondelete='CASCADE'), nullable=False, index=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey('users.id', ondelete='CASCADE'), nullable=True, index=True)
     
     # Generation metadata 
     topic: Mapped[str] = mapped_column(String(500))

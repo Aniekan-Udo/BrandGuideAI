@@ -157,6 +157,7 @@ services:
     build: .
     command: celery -A celery_task worker --queues rag_refresh --concurrency 2 --loglevel info
     environment:
+      PYTHONPATH: /app
       GROQ_API_KEY: ${GROQ_API_KEY}
       POSTGRES_URI: ${POSTGRES_URI}
       REDIS_URL: ${REDIS_URL}
