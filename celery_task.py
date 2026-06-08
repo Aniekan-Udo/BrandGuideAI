@@ -106,6 +106,7 @@ def generate_content(
             approved=False,
             feedback="",
             score=0.0,
+            hard_constraint_evidence={},
             generation_id=generation_id,
             status="pending"
         )

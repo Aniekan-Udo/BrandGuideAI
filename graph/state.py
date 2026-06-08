@@ -1,4 +1,4 @@
-from typing import TypedDict, Optional
+from typing import TypedDict, Optional, Dict, Any
 
 class GraphState(TypedDict):
     # Input
@@ -25,6 +25,7 @@ class GraphState(TypedDict):
     tone_match: float
     structure_match: float
     signature_match: float
+    hard_constraint_evidence: Optional[Dict[str, Any]]  
 
     # Final output
     generation_id: str
