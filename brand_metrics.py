@@ -142,6 +142,9 @@ class BrandMetricsSQL(MetricPort):
                     extracted=extracted,
                     score_weight=1.0,
                     source="document",
+                    page_number=1,      
+                    total_pages=1,      
+                    page_hash=doc_hash,
                 )
                 session.add(row)
                 session.commit()
@@ -209,14 +212,17 @@ class BrandMetricsSQL(MetricPort):
         try:
             with get_db_session() as session:
                 row = BrandMetrics(
-                    business_id=self.business_id,
-                    content_type=self.content_type,
-                    doc_id=None,        # not sourced from an uploaded document
-                    doc_hash=doc_hash,
-                    extracted=extracted,
-                    score_weight=score_weight,
-                    source="generation",
-                )
+                        business_id=self.business_id,
+                        content_type=self.content_type,
+                        doc_id=None,
+                        doc_hash=doc_hash,
+                        extracted=extracted,
+                        score_weight=score_weight,
+                        source="generation",
+                        page_number=1,      
+                        total_pages=1,     
+                        page_hash=doc_hash,  
+                    )
                 session.add(row)
                 session.commit()
                 logger.info(

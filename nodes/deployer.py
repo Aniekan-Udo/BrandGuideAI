@@ -59,6 +59,22 @@ def deployer_node(state: GraphState, memory: FeedbackPortSQL) -> GraphState:
         "Generation complete generation_id=%s score=%.1f iterations=%d",
         generation_id, state.get("score", 0.0), state.get("iteration", 1)
     )
+    # Promote high-scoring generations back into brand_metrics
+    PROMOTION_THRESHOLD = 8.5
+    score = state.get("score", 0.0)
+    if score >= PROMOTION_THRESHOLD:
+        from celery_task import promote_generation_feedback
+        promote_generation_feedback.delay(
+            business_id=state["business_id"],
+            content_type=state["content_type"],
+            generation_content=state["content"],
+            human_approved=False,
+            score=score
+        )
+        logger.info(
+            "Promoted generation to brand_metrics generation_id=%s score=%.1f",
+            generation_id, score
+        )
 
     return {
         **state,

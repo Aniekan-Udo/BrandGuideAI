@@ -173,7 +173,9 @@ async def _run_graph(graph_flow, initial_state):
 
     try:
         async for chunk in graph_flow.astream(initial_state):
-            final_state.update(chunk)
+            for node_name, node_state in chunk.items():
+                if isinstance(node_state, dict):
+                    final_state.update(chunk)
 
             if stream_failed:
                 continue

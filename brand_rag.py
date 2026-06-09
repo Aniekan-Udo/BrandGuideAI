@@ -64,23 +64,31 @@ class BrandRAG:
 
 
     def query(self, topic: str) -> str:
-        """Retrieve the most relevant passages for *topic*."""
+        """Retrieve brand voice examples — prioritizes stylistic quality over topic match."""
         if not topic.strip():
             raise ValueError("Query topic must not be empty.")
 
         index = self._get_index().index
-        retriever = index.as_retriever(similarity_top_k=self.similarity_top_k)
 
-        try:
-            results = self._retrieve_with_retry(retriever, topic)
-        except Exception as exc:
-            logger.error(
-                "Retrieval failed for business_id=%s content_type=%s topic=%r: %s",
-                self.business_id, self.content_type, topic, exc,
-            )
-            raise
+        # Primary: topic-relevant retrieval
+        topic_retriever = index.as_retriever(similarity_top_k=self.similarity_top_k)
+        topic_results = self._retrieve_with_retry(topic_retriever, topic)
 
-        if not results:
+        # Secondary: voice-quality retrieval — fetch best examples regardless of topic
+        voice_query = "brand voice storytelling authentic narrative example"
+        voice_retriever = index.as_retriever(similarity_top_k=2)
+        voice_results = self._retrieve_with_retry(voice_retriever, voice_query)
+
+        # Merge — deduplicate by text, topic results first
+        seen = set()
+        merged = []
+        for r in topic_results + voice_results:
+            key = r.text[:100]
+            if key not in seen:
+                seen.add(key)
+                merged.append(r)
+
+        if not merged:
             logger.warning(
                 "No results for business_id=%s content_type=%s topic=%r",
                 self.business_id, self.content_type, topic,
@@ -89,9 +97,9 @@ class BrandRAG:
 
         logger.info(
             "Retrieved %d node(s) for business_id=%s content_type=%s topic=%r",
-            len(results), self.business_id, self.content_type, topic,
+            len(merged), self.business_id, self.content_type, topic,
         )
-        return "\n\n".join(r.text for r in results)
+        return "\n\n".join(r.text for r in merged)
 
     def refresh(self, new_doc_content: str = None) -> None:
         """
