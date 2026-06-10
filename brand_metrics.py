@@ -103,7 +103,7 @@ class BrandMetricsSQL(MetricPort):
             exists = session.query(BrandMetrics).filter_by(
                 business_id=self.business_id,
                 content_type=self.content_type,
-                doc_hash=doc_hash,
+                doc_hash=doc_hash
             ).first()
             if exists:
                 logger.info(
@@ -134,25 +134,26 @@ class BrandMetricsSQL(MetricPort):
         # --- persist new row ---
         try:
             with get_db_session() as session:
-                row = BrandMetrics(
-                    business_id=self.business_id,
-                    content_type=self.content_type,
-                    doc_id=doc_id,
-                    doc_hash=doc_hash,
-                    extracted=extracted,
-                    score_weight=1.0,
-                    source="document",
-                    page_number=1,      
-                    total_pages=1,      
-                    page_hash=doc_hash,
-                )
-                session.add(row)
-                session.commit()
-                logger.info(
-                    "Persisted metrics for doc_id=%s business=%s content_type=%s",
-                    doc_id, self.business_id, self.content_type
-                )
-                return True
+                if session.query(BrandMetrics).filter_by(status="approved").first():
+                    row = BrandMetrics(
+                        business_id=self.business_id,
+                        content_type=self.content_type,
+                        doc_id=doc_id,
+                        doc_hash=doc_hash,
+                        extracted=extracted,
+                        score_weight=1.0,
+                        source="document",
+                        page_number=1,      
+                        total_pages=1,      
+                        page_hash=doc_hash
+                    )
+                    session.add(row)
+                    session.commit()
+                    logger.info(
+                        "Persisted metrics for doc_id=%s business=%s content_type=%s",
+                        doc_id, self.business_id, self.content_type
+                    )
+                    return True
 
         except IntegrityError:
             # Race condition — another worker already inserted this hash
@@ -252,6 +253,7 @@ class BrandMetricsSQL(MetricPort):
                 .filter_by(
                     business_id=self.business_id,
                     content_type=self.content_type,
+                    status='approved',
                 )
                 .order_by(BrandMetrics.created_at.asc())
                 .all()
@@ -338,6 +340,7 @@ class BrandMetricsSQL(MetricPort):
             brain = session.query(BrandBrain).filter_by(
                 business_id=self.business_id,
                 content_type=self.content_type,
+                status='approved',
             ).first()
             if brain:
                 # Warm cache

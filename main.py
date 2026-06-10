@@ -63,10 +63,12 @@ app.state.limiter = limiter
 @app.exception_handler(RateLimitExceeded)
 async def rate_limit_handler(request, exc):
     return JSONResponse(status_code=429, content={"detail": "Rate limit exceeded. Try again later."})
-from routers import users, conversation, document
+from routers import users, conversation, document, review
 app.include_router(users.router, prefix="/users", tags=["Users"])
 app.include_router(conversation.router, prefix="/conversation", tags=["Conversation"])
 app.include_router(document.router, prefix="/documents", tags=["Documents"])
+app.include_router(review.router, prefix="/review", tags=["Review"])
+
 
 # Serve frontend static assets and routes
 app.mount("/static", StaticFiles(directory="static"), name="static")

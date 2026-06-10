@@ -128,6 +128,15 @@ class BrandMetrics(Model):
         nullable=True,
         index=True
     )
+    graph: Mapped[dict] = mapped_column(JSONB, nullable=False, server_default='{}')
+    
+    # Review workflow
+    status: Mapped[str] = mapped_column(
+        String(20),
+        nullable=False,
+        server_default='proposed'  # 'proposed' | 'approved' | 'rejected'
+    )
+    
     doc_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     # Structured extraction result from LLM — maps directly to METRICS_EXTRACTION schema
     extracted: Mapped[dict] = mapped_column(JSONB, nullable=False, server_default='{}')
@@ -156,18 +165,47 @@ class BrandMetrics(Model):
 
 
 class BrandBrain(Model):
-    __tablename__ = "brand_brains"
+    __tablename__ = 'brand_brains'
     
-    id = Column(Integer, primary_key=True)
-    business_id = Column(String, nullable=False)
-    content_type = Column(String, nullable=False)
-    synthesis_text = Column(Text, nullable=False)  # the brain
-    profile_count = Column(Integer, default=0)      # rows baked in
-    last_synthesis_at = Column(DateTime, default=datetime.utcnow)
-    version = Column(Integer, default=1)            # for tracking drift
+    id: Mapped[int] = mapped_column(primary_key=True)
+    business_id: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
+    content_type: Mapped[str] = mapped_column(String(50), nullable=False, index=True)
     
-    __table_args__ = (
-        UniqueConstraint('business_id', 'content_type', name='uq_brand_brains'),
+    # The graph — single JSONB with all facts, patterns, prohibited
+    graph: Mapped[dict] = mapped_column(JSONB, nullable=False, server_default='{}')
+    
+    # Review workflow
+    status: Mapped[str] = mapped_column(
+        String(20),
+        nullable=False,
+        server_default='proposed'  # 'proposed' | 'approved' | 'rejected'
+    )
+    review_notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    reviewed_by: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    reviewed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    
+    # Source tracking
+    source: Mapped[str] = mapped_column(
+        String(20),
+        nullable=False,
+        server_default='document'  # 'document' | 'generation'
+    )
+    doc_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey('brand_documents.id', ondelete='CASCADE'),
+        nullable=True,
+        index=True
+    )
+    
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False
     )
 
 class Generation(Model):

@@ -375,24 +375,27 @@ def refresh_rag(self, business_id, content_type, new_doc_content):
 
 
 @celery_app.task(bind=True, name="tasks.extract_metrics", max_retries=3, default_retry_delay=10)
-def extract_metrics(self, business_id: str, content_type: str, doc_id: int, doc_content: str):
+def extract_metrics(self, business_id: str, content_type: str, status:str, doc_id: int, doc_content: str):
     from brand_metrics import BrandMetricsSQL
+    from database import BrandMetrics
     analyzer = BrandMetricsSQL(business_id=business_id, content_type=content_type)
     try:
-        inserted = analyzer.extract_and_save(doc_id=doc_id, doc_content=doc_content)
-        if not inserted:
-            return {"status": "skipped", "reason": "already_extracted"}
+        with get_db_session as session:
+            if session.query(BrandMetrics).filter_by(status="proposed").first():
+                inserted = analyzer.extract_and_save(doc_id=doc_id, doc_content=doc_content)
+                if not inserted:
+                    return {"status": "skipped", "reason": "already_extracted"}
 
-        lock_key = f"context_rebuild:{business_id}:{content_type}"
-        lock = redis_client.lock(lock_key, timeout=180)
-        if not lock.acquire(blocking=True, blocking_timeout=30):
-            return {"status": "complete", "synthesis": "deferred"}
-        try:
-            analyzer.build_and_cache_context()
-        finally:
-            lock.release()
+                lock_key = f"context_rebuild:{business_id}:{content_type}"
+                lock = redis_client.lock(lock_key, timeout=180)
+                if not lock.acquire(blocking=True, blocking_timeout=30):
+                    return {"status": "proposed", "synthesis": "deferred"}
+                try:
+                    analyzer.build_and_cache_context()
+                finally:
+                    lock.release()
 
-        return {"status": "complete", "business_id": business_id, "doc_id": doc_id}
+        return {"status": "proposed", "business_id": business_id, "doc_id": doc_id}
     except Exception as exc:
         raise self.retry(exc=exc, countdown=10)
 
