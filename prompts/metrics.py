@@ -1,6 +1,8 @@
 # prompts/metrics.py
 
-METRICS_EXTRACTION = """You are a document analyst. Analyze the document below and extract a precise style, tone, and structural profile that can be used to replicate its writing in new documents.
+METRICS_EXTRACTION = """You are a document analyst. Analyze the document below and extract a precise writing intelligence profile that can be used to replicate HOW this brand writes — not WHAT it wrote.
+
+CRITICAL RULE: You are extracting PATTERNS, not content. Never copy sentences, phrases, or specific words from the document. Every field must describe the writing mechanics and structural moves in abstract, reusable terms.
 
 Return ONLY a JSON object with no preamble or markdown. Use this schema:
 {{
@@ -18,27 +20,25 @@ Return ONLY a JSON object with no preamble or markdown. Use this schema:
     "use_of_formatting": "<none|light|heavy>",
     "numerical_density": "<low|medium|high>",
     "mechanical_rules": {{
-      "sentence_rhythm": "<how rhythm is mechanically achieved — e.g. 'alternates 3-8 word sentences with 12-20 word sentences; uses 1-2 sentence fragments per section for emphasis'>",
-      "paragraph_constraints": "<mechanical constraints — e.g. 'max 4 sentences per paragraph; single-sentence paragraphs allowed for emphasis'>",
-      "heading_format": "<exact heading format — e.g. 'numbered bold headings (1, 2, 3...) for main arguments; never bullet points for primary structure'>",
-      "opening_mechanics": "<exact structural moves — e.g. 'relatable observation → uncomfortable truth pivot → one-sentence contrast redefining the topic'>",
-      "closing_mechanics": "<exact structural moves — e.g. 'brand methodology sentence → two short parallel contrast sentences → soft CTA question'>",
-      "evidence_anchoring": "<how claims are grounded — e.g. 'every major claim must have a specific number, timeframe, or client outcome'>"
+      "sentence_rhythm": "<describe the rhythm mechanics — e.g. 'alternates short declarative sentences (3-8 words) with longer explanatory ones (15-25 words); uses 1-2 fragment sentences per section for punch'>",
+      "paragraph_constraints": "<describe paragraph limits — e.g. 'max 4 sentences per paragraph; opening paragraph is always 2-3 sentences; single-sentence paragraphs used for emphasis'>",
+      "heading_format": "<describe heading conventions — e.g. 'numbered bold headings for main sections; no bullet points as primary structure'>",
+      "evidence_anchoring": "<describe how claims are grounded — e.g. 'every major claim is anchored to a specific number, client count, timeframe, or measurable outcome; vague assertions are never left unanchored'>"
     }}
   }},
   "intellectual_patterns": {{
-    "diagnostic_style": "<how the brand diagnoses problems — e.g. 'brands confuse activity with strategy', 'brands perform values rather than live them'>",
-    "value_hierarchy": "<what the brand prioritizes over what — e.g. 'consistency over creativity', 'authenticity over performance', 'relationship over transaction'>",
-    "reframing_moves": "<how the brand redefines concepts — e.g. 'not creating content, creating noise', 'not a tactic, the connective tissue'>",
-    "authority_source": "<where the brand's authority comes from — e.g. 'over 200 brands across industries', 'a decade of crafting narratives'>",
-    "argument_structure": "<how the brand builds arguments — e.g. 'relatable observation → pattern diagnosis → value hierarchy → prescription → outcome'>",
+    "diagnostic_style": "<describe HOW the brand names problems — e.g. 'frames failures as intention gaps not knowledge gaps: brands confuse X with Y, brands perform Z rather than live it'>",
+    "value_hierarchy": "<describe the brand's ranked priorities — e.g. 'consistency ranked above creativity; authenticity ranked above performance; long-term relationship ranked above short-term transaction'>",
+    "reframing_moves": "<describe HOW the brand redefines concepts — e.g. 'takes a commonly accepted term and splits it into what people think it means vs. what it actually means; uses X is not Y, it is Z structure'>",
+    "authority_source": "<describe what makes the brand credible — e.g. 'grounds authority in volume of client experience with specific numbers, and in duration of practice with specific timeframes'>",
+    "argument_structure": "<describe the intellectual arc — e.g. 'opens with relatable observation → names the hidden flaw in common behavior → states the brand's diagnostic → prescribes the value-hierarchy-aligned solution → closes with outcome'>",
     "thinking_templates": [
-      "<list 2-3 specific sentence structures the brand uses — e.g. 'X isn't Y. It's Z.', 'The brands that win are the ones that...', 'We've seen brands [failure] — and then [outcome]. Why? Because [diagnosis].'>"
+      "<describe 2-4 abstract sentence structures the brand uses as intellectual moves — describe the MOVE, not the words. e.g. 'opens section with a pattern observation using present tense plural subject', 'pivots with a contrast using But here is the + uncomfortable truth + authority anchor', 'closes section with a rhetorical question that mirrors the opening problem'>"
     ]
   }},
   "tone": {{
     "register": "<formal|semi-formal|conversational>",
-    "emotional_quality": ["<e.g. confident, cautious, persuasive, neutral, urgent, playful, empathetic>"],
+    "emotional_quality": ["<e.g. confident, cautious, persuasive, empathetic>"],
     "reader_relationship": "<authoritative|collaborative|deferential|intimate|transactional>",
     "hedging_frequency": "<low|medium|high>",
     "assertiveness": <score 0.0-1.0>,
@@ -49,35 +49,27 @@ Return ONLY a JSON object with no preamble or markdown. Use this schema:
     "evidence_ratio": <score 0.0-1.0>,
     "transition_density": "<low|medium|high>",
     "front_loads_conclusions": <true|false>,
-    "opening_formula": "<exact description of how this document opens — e.g. 'relatable observation about common brand behavior followed by uncomfortable truth pivot anchored to brand experience'>",
-    "closing_formula": "<exact description of how this document closes — e.g. 'one-line CTA as question: Ready to X? Let us Y.', 'punchy declarative kicker: Because X every time.'>",
-    "section_pattern": "<description of how ideas are sequenced>",
-    "narrative_arc": "<how the document builds — e.g. hook→problem→brand_experience→numbered_insights→CTA>"
+    "opening_pattern": "<describe HOW openings are written — the structural move, not the words. e.g. 'opens with a universally relatable brand behavior stated as present-tense observation, immediately followed by an uncomfortable truth pivot anchored to brand experience and client count, closed with a two-part reframe that splits what brands think they are doing from what they are actually doing'>",
+    "closing_pattern": "<describe HOW closings are written — the structural move, not the words. e.g. 'closes with brand methodology restatement in one sentence, followed by two parallel short sentences contrasting what the work does not do vs. what it does, ending with a soft CTA phrased as an inviting question'>",
+    "section_pattern": "<describe how body sections are structured — the pattern, not the content>",
+    "narrative_arc": "<describe the overall flow — e.g. 'hook → diagnosis → brand experience proof → actionable insight list → CTA'>"
   }},
   "persuasion": {{
     "primary_appeal": "<logos|ethos|pathos|mixed|none>",
     "social_proof_usage": "<none|light|heavy>",
-    "social_proof_pattern": "<how social proof is used — e.g. 'specific client numbers: over 200 brands', 'timeframe anchors: a decade', 'outcome metrics: 500% traffic increase'>",
-    "scarcity_or_urgency_tactics": <true|false>,
-    "objection_handling": "<proactive|reactive|none>",
+    "social_proof_pattern": "<describe HOW social proof is used — e.g. 'anchors credibility claims to specific client volume numbers and measurable outcome percentages; never uses vague terms like many clients'>",
     "call_to_action_pattern": "<none|single|repeated|pervasive>",
-    "cta_examples": ["<copy the exact CTA phrases from the document>"]
+    "cta_pattern": "<describe HOW CTAs are written — the structural move. e.g. 'single soft CTA as an inviting question at the very end; mirrors the problem named in the opening; uses first-person plural invitation verb'>"
   }},
-  "signature_patterns": [
-    "<copy exact distinctive phrases, constructions, or habits from this document — quote verbatim where possible>"
+  "signature_constructions": [
+    "<describe distinctive WRITING CONSTRUCTIONS — the move, not the phrase. e.g. 'uses a two-part contrast sentence where part 1 names what content does and part 2 names what it actually is', 'opens sections with a we + past tense + volume anchor sentence to establish authority before making a claim'>"
   ],
-  "opening_sentences": [
-    "<copy the exact first 1-2 sentences of the document>"
-  ],
-  "closing_sentences": [
-    "<copy the exact last 1-2 sentences of the document>"
-  ],
-  "section_signatures": {{
-    "opening": "<exact pattern used to open — quote directly if under 20 words>",
-    "list_intro": "<exact phrase used to introduce lists — e.g. 'Here are a few key takeaways:', 'Here is what we have learned:'>",
-    "closing": "<exact pattern used to close>"
+  "section_patterns": {{
+    "opening_move": "<describe the opening structural move in abstract terms>",
+    "list_introduction_move": "<describe how the brand introduces lists or key points — e.g. 'introduces numbered insights with a Here is what we learned after + timeframe + context phrase'>",
+    "closing_move": "<describe the closing structural move in abstract terms>"
   }},
-  "generation_instructions": "<a concrete, specific paragraph on how to write in this style. Name exact habits to replicate (e.g. open with a provocative truth, anchor every claim to a number, close with a one-line CTA). Name exact habits to avoid (e.g. never open with a rhetorical question, never hedge with might or could, never use passive voice).>"
+  "generation_instructions": "<write a concrete, pattern-focused brief on HOW to write in this style. Focus entirely on structural moves and writing mechanics. Name what to replicate as patterns (e.g. open with a relatable observation then pivot to uncomfortable truth, anchor every claim to a number). Name what to avoid as anti-patterns (e.g. never open with a rhetorical question, never leave a claim unanchored, never hedge with might or could). Do NOT reference specific sentences or phrases from the source document.>"
 }}
 
 Content type: {content_type}
@@ -85,19 +77,20 @@ Document:
 {document}"""
 
 
-METRICS_SYNTHESIS = """You are a brand intelligence analyst. You have been given {total_documents} extracted style profiles from documents belonging to the same brand.
+METRICS_SYNTHESIS = """You are a brand intelligence analyst. You have been given {total_documents} extracted writing intelligence profiles from documents belonging to the same brand.
 
-Your job is to synthesize these profiles into a single, precise brand intelligence brief that a content writer can use to produce new content that is indistinguishable from this brand's voice.
+Your job is to synthesize these profiles into a single, precise brand writing intelligence brief that a content writer can use to produce ORIGINAL content that is structurally and tonally indistinguishable from this brand's voice.
+
+CRITICAL RULE: This brief must describe HOW to write, never WHAT to write. Do not include any specific sentences, phrases, or words from the source documents. Every section must describe writing patterns, structural moves, and intellectual mechanics in abstract, reusable terms. A writer should be able to use this brief to write about ANY topic in this brand's voice.
 
 Rules:
 - Where profiles agree, state the pattern confidently and concisely.
-- Where profiles contradict, identify the underlying reason and give practical guidance on which to apply.
+- Where profiles contradict, identify the underlying reason and give practical guidance.
 - Profiles with a higher weight (score_weight) represent validated high-quality content and should carry more influence.
-- SIGNATURE PHRASES must include actual quoted phrases from the documents — not descriptions of phrases. A writer must be able to read this section and know exactly what words to use.
-- OPENING FORMULA and CLOSING FORMULA are the most critical sections. Be specific — describe the exact structural move the brand makes and quote examples directly.
-- GENERATION INSTRUCTIONS must be a concrete DO and DON'T brief. Every instruction must be specific enough that a writer can act on it immediately.
-- Do not invent patterns not present in the source profiles. If a dimension has insufficient data, state "Insufficient data."
-- Extract the brand name from the profiles if present and include it explicitly.
+- OPENING PATTERN and CLOSING PATTERN are the most critical sections — describe the structural moves precisely so any writer can execute them on any topic.
+- GENERATION INSTRUCTIONS must be entirely pattern-based — no content references, no quoted phrases, only structural and tonal mechanics a writer can apply to any topic.
+- Do not invent patterns not present in the source profiles. State "Insufficient data" where needed.
+- Extract the brand name from the profiles and include it explicitly.
 
 Business: {business_id}
 Content type: {content_type}
@@ -105,95 +98,80 @@ Content type: {content_type}
 Extracted profiles (ordered oldest to newest):
 {profiles}
 
-Return your synthesis as a well-structured plain text brand intelligence brief. Use clear section headers starting with #. Do not return JSON.
+Return your synthesis as a well-structured plain text brand writing intelligence brief. Use clear section headers starting with #. Do not return JSON.
 
 Structure your output exactly as follows:
 
 # BRAND NAME
-[The brand name extracted from documents. If not found, write: Not extracted — inject manually.]
+[The brand name extracted from documents. If not found: Not extracted — inject manually.]
 
 # BRAND VOICE OVERVIEW
-[2-3 sentence summary of the brand's core voice identity. Include the brand name.]
+[2-3 sentences describing the brand's core writing identity in terms of HOW it writes — register, authority style, reader relationship, and intellectual stance. No content references.]
 
 # INTELLECTUAL PATTERNS
 
 DIAGNOSTIC STYLE:
-[How this brand diagnoses problems. e.g. "brands confuse activity with strategy," "brands perform values rather than live them"]
+[How this brand names and frames problems — the intellectual move, not examples. e.g. "frames failures as intention gaps: the brand consistently diagnoses problems as confusions between two things rather than lack of knowledge or resources"]
 
 VALUE HIERARCHY:
-[What the brand prioritizes over what. e.g. "consistency > creativity," "authenticity > performance," "relationship > transaction"]
+[What the brand ranks above what, and how this shapes prescriptions — e.g. "ranks consistency above creativity, authenticity above performance; prescriptions always reflect this order"]
 
 REFRAMING MOVES:
-[How the brand redefines concepts. e.g. "not creating content, creating noise," "not a tactic, the connective tissue"]
+[How the brand redefines concepts — the structural move. e.g. "takes widely accepted terms and splits them: names what people think X means, then names what X actually is in the brand's framework"]
 
 AUTHORITY SOURCE:
-[Where the brand's credibility comes from. e.g. "over 200 brands across industries," "a decade of crafting narratives"]
+[How the brand establishes credibility — the pattern, not the claims. e.g. "grounds authority in specific volume of experience with numbers, and in duration of practice with timeframes; never makes unanchored credibility claims"]
 
 ARGUMENT STRUCTURE:
-[The intellectual arc. e.g. "relatable observation → pattern diagnosis → value hierarchy → prescription → outcome"]
+[The intellectual arc the brand uses — described as a sequence of moves. e.g. "relatable observation → hidden flaw diagnosis → brand authority anchor → value-hierarchy prescription → measurable outcome"]
 
 THINKING TEMPLATES:
-[Specific sentence structures the brand uses. e.g.]
-- "X isn't Y. It's Z."
-- "The brands that win are the ones that..."
-- "We've seen brands [specific failure] — and then [outcome]. Why? Because [diagnosis]."
-- "Most brands [common behavior]. But [reframe]."
+[Describe 3-5 abstract sentence-level intellectual moves the brand makes. Describe the MOVE not the words:]
+- [Move 1: e.g. "opens with a present-tense plural observation about common brand behavior that the reader will recognize in themselves"]
+- [Move 2: e.g. "pivots with a contrast marker followed by an uncomfortable truth statement anchored to brand experience volume"]
+- [Move 3: e.g. "closes sections with a cause-effect diagnosis using Why? Because [root cause] structure"]
+- [Move 4: e.g. "introduces brand prescription with a The brands that win construction followed by the value-hierarchy-aligned behavior"]
 
 # STYLE SIGNATURE
-[Consolidated style rules. Include: sentence length, rhythm, voice, vocabulary level, formatting habits, numerical density.]
+[Consolidated style mechanics. Describe patterns, not values:]
 
 MECHANICAL RULES:
-- Sentence rhythm: [how achieved mechanically]
-- Paragraph constraints: [specific limits]
-- Heading format: [exact format]
-- Evidence anchoring: [how claims are grounded]
+- Sentence rhythm: [how rhythm is mechanically achieved — describe the alternation pattern]
+- Paragraph constraints: [specific structural limits]
+- Heading format: [exact format convention]
+- Evidence anchoring: [the rule for how claims must be grounded]
 
 # TONE SIGNATURE
-[Consolidated tone rules. Include: register, assertiveness score, hedging frequency, emotional qualities, reader relationship.]
+[Consolidated tone mechanics — register, assertiveness level, hedging rules, reader relationship stance.]
 
 # STRUCTURE SIGNATURE
 
-OPENING FORMULA:
-[Exact description of how this brand opens content. Quote 1-2 actual opening sentences from the profiles.]
+OPENING PATTERN:
+[Describe the structural sequence of moves used to open content — abstract and reusable for any topic. e.g. "Move 1: state a universally relatable brand behavior as a present-tense observation. Move 2: pivot with an uncomfortable truth marker anchored to brand experience. Move 3: execute a two-part reframe splitting what brands think they are doing from what they are actually doing."]
 
-OPENING TEMPLATE:
-[Abstract the invariant pattern with placeholders — e.g. "[Relatable observation] → [But here's the uncomfortable truth we tell every new client at [Brand Name]:] → [One-sentence contrast redefining the topic]"]
+CLOSING PATTERN:
+[Describe the structural sequence of moves used to close content — abstract and reusable for any topic. e.g. "Move 1: restate the brand's core methodology in one sentence using first-person plural. Move 2: execute two parallel short sentences contrasting what the work avoids vs. what it produces. Move 3: close with a soft CTA as an inviting question that mirrors the opening problem."]
 
-CLOSING FORMULA:
-[Exact description of how this brand closes. Quote 1-2 actual closing sentences.]
-
-CLOSING TEMPLATE:
-[Abstract the invariant pattern — e.g. "[Brand methodology sentence] → [Parallel contrast: two short sentences] → [Soft CTA: Ready to [action]? Let's [action].]"]
+SECTION PATTERN:
+[Describe how body sections are structured — the move sequence, not content.]
 
 NARRATIVE ARC:
-[Standard flow — e.g. provocative_truth → brand_experience_claim → problem_diagnosis → numbered_insights → CTA]
+[The standard flow described as a sequence of functional moves — e.g. "hook move → diagnosis move → authority anchor → insight list → CTA move"]
 
 EVIDENCE PATTERN:
-[How the brand grounds claims — specific numbers, timeframes, client outcomes. Quote examples.]
+[The rule for how claims are grounded — describe the pattern not the examples.]
 
-# SIGNATURE PHRASES
-
-Openings:
-[Quoted phrases used to open content]
-
-Brand anchors:
-[Quoted phrases that reference the brand by name — e.g. "At Vantage Creative, we've..."]
-
-List intros:
-[Quoted phrases used to introduce lists]
-
-Closings:
-[Quoted CTA phrases and closing kickers]
-
-Emphasis constructions:
-[Em-dash usage, bold patterns, rhetorical constructions]
+# SIGNATURE CONSTRUCTIONS
+[Describe 4-6 distinctive writing constructions as abstract moves. Describe WHAT THE CONSTRUCTION DOES, not what it says:]
+- [Construction 1: describe the move]
+- [Construction 2: describe the move]
 
 # GENERATION INSTRUCTIONS
 DO:
-- [Specific, actionable instruction — minimum 8]
+- [Pattern-based instruction — minimum 8, all structural/tonal, no content references]
 
 DON'T:
-- [Specific, actionable instruction — minimum 5]
+- [Anti-pattern instruction — minimum 5, all structural/tonal, no content references]
 
 # CONFIDENCE ASSESSMENT
 [Which dimensions are well-established vs. need more data]"""

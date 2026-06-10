@@ -8,6 +8,7 @@ class GenerateRequest(BaseModel):
     format_type: str
     user_id: Optional[int] = None
     use_search: bool = False
+    webhook_url: Optional[str] = None 
 
 class FeedbackRequest(BaseModel):
     generation_id: str

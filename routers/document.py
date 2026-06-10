@@ -25,7 +25,7 @@ async def upload(
     from celery_task import refresh_rag, extract_metrics
     from database import BrandDocument
 
-    ALLOWED_TYPES = {"application/pdf", "text/plain", "text/csv"}
+    ALLOWED_TYPES = {"application/pdf", "text/plain", "text/csv", "tex/docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document"}
     if file.content_type not in ALLOWED_TYPES:
         raise HTTPException(status_code=400, detail="File type not supported")
 
@@ -38,7 +38,7 @@ async def upload(
     except UnicodeDecodeError:
         raise HTTPException(status_code=400, detail="File must be UTF-8 encoded text")
 
-    if len(doc_content) > 100000:  # Arbitrary limit of ~100k characters
+    if len(doc_content) > 100000: 
         raise HTTPException(status_code=400, detail="File is too large")
 
     _idempotency_key = f"{business_id}:{create_idempotency_key(file_content)}"
