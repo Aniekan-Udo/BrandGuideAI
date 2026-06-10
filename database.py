@@ -119,7 +119,9 @@ class BrandMetrics(Model):
     id: Mapped[int] = mapped_column(primary_key=True)
     business_id: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
     content_type: Mapped[str] = mapped_column(String(50), nullable=False, index=True)
-
+    page_number: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)   
+    total_pages: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)  
+    page_hash: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)  
     # FK to the source document. NULL for rows sourced from high-scoring generations.
     doc_id: Mapped[Optional[int]] = mapped_column(
         ForeignKey('brand_documents.id', ondelete='CASCADE'),

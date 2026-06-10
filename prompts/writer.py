@@ -10,6 +10,26 @@ GENERATION INSTRUCTIONS (follow these exactly — highest priority):
 SIGNATURE PHRASES (weave these in naturally — do not force or overuse):
 {signature_phrases}
 
+BRAND NAME: {brand_name}
+
+OPENING FORMULA (follow this exact structure):
+{opening_formula}
+
+CLOSING FORMULA (follow this exact structure):
+{closing_formula}
+
+MECHANICAL RULES:
+{mechanical_rules}
+
+EVIDENCE ANCHORING:
+{evidence_anchoring}
+
+DIAGNOSTIC STYLE:
+{diagnostic_style}
+
+REFRAMING MOVES:
+{reframing_moves}
+
 BRAND STYLE PATTERNS (use these to understand HOW the brand writes, not WHAT to write):
 {examples}
 
@@ -64,6 +84,26 @@ GENERATION INSTRUCTIONS (follow these exactly — highest priority):
 
 SIGNATURE PHRASES (weave these in naturally where missing):
 {signature_phrases}
+
+BRAND NAME: {brand_name}
+
+OPENING FORMULA (follow this exact structure):
+{opening_formula}
+
+CLOSING FORMULA (follow this exact structure):
+{closing_formula}
+
+MECHANICAL RULES:
+{mechanical_rules}
+
+EVIDENCE ANCHORING:
+{evidence_anchoring}
+
+DIAGNOSTIC STYLE:
+{diagnostic_style}
+
+REFRAMING MOVES:
+{reframing_moves}
 
 BRAND STYLE PATTERNS (reference for HOW the brand writes, not content to reproduce):
 {examples}

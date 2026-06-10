@@ -11,6 +11,8 @@ logger = logging.getLogger(__name__)
 from utils.observe import observe
 
 
+
+
 DEFAULT_METRICS = {
     "tone": "warm, conversational",
     "perspective": "first-person plural (we/our)",
@@ -101,19 +103,41 @@ def writer_node(state: GraphState, rag: BrandRAG, analyzer: BrandMetricsSQL,
     # Extract high-signal sections from brand brain for focused injection
     generation_instructions = _extract_section(metrics, "GENERATION INSTRUCTIONS")
     signature_phrases       = _extract_section(metrics, "SIGNATURE PHRASES")
+    brand_name              = _extract_section(metrics, "BRAND NAME")
+    
+    # NEW: Extract formulaic patterns
+    opening_formula         = _extract_section(metrics, "OPENING FORMULA")
+    closing_formula         = _extract_section(metrics, "CLOSING FORMULA")
+    mechanical_rules        = _extract_section(metrics, "MECHANICAL RULES")
+    evidence_anchoring      = _extract_section(metrics, "EVIDENCE ANCHORING")
+    diagnostic_style        = _extract_section(metrics, "DIAGNOSTIC STYLE")
+    reframing_moves         = _extract_section(metrics, "REFRAMING MOVES")
 
     # Fall back gracefully if sections are missing (cold start / sparse brain)
     if not generation_instructions:
         generation_instructions = "Write in first-person plural (we/our). Be direct and authoritative. Ground claims in specific experience and data."
     if not signature_phrases:
         signature_phrases = "None extracted yet — rely on brand voice metrics above."
+    if not brand_name:
+        brand_name = "our agency"
+    
+    # NEW: Fallbacks for formulaic patterns
+    if not opening_formula:
+        opening_formula = "Open with a relatable observation, pivot to brand authority, end with a contrast."
+    if not closing_formula:
+        closing_formula = "Close with brand methodology, parallel contrast, and soft CTA."
+    if not mechanical_rules:
+        mechanical_rules = "Use standard paragraph structure."
+    if not evidence_anchoring:
+        evidence_anchoring = "Ground claims in specific numbers, timeframes, or client outcomes."
+    if not diagnostic_style:
+        diagnostic_style = "Diagnose problems as intention failures, not surface symptoms."
+    if not reframing_moves:
+        reframing_moves = "Redefine concepts by negation and contrast."
 
     try:
-        if state.get("use_search", False):
-            examples = GENERIC_EXAMPLES
-        else:
-            raw_examples = rag.query(topic)
-            examples = _build_examples_block(raw_examples)
+        raw_examples = rag.query(topic)
+        examples = _build_examples_block(raw_examples)
     except Exception as e:
         logger.warning("RAG failed, using generic examples: %s", e)
         examples = GENERIC_EXAMPLES
@@ -135,6 +159,14 @@ def writer_node(state: GraphState, rag: BrandRAG, analyzer: BrandMetricsSQL,
             metrics=metrics,
             generation_instructions=generation_instructions,
             signature_phrases=signature_phrases,
+            brand_name=brand_name,
+            # NEW: Formulaic patterns
+            opening_formula=opening_formula,
+            closing_formula=closing_formula,
+            mechanical_rules=mechanical_rules,
+            evidence_anchoring=evidence_anchoring,
+            diagnostic_style=diagnostic_style,
+            reframing_moves=reframing_moves,
             examples=examples,
             approved="\n".join(approved) if approved else "None yet",
             rejected="\n".join(rejected) if rejected else "None yet"
@@ -150,9 +182,17 @@ def writer_node(state: GraphState, rag: BrandRAG, analyzer: BrandMetricsSQL,
             metrics=metrics,
             generation_instructions=generation_instructions,
             signature_phrases=signature_phrases,
+            brand_name=brand_name,
+            # NEW: Formulaic patterns
+            opening_formula=opening_formula,
+            closing_formula=closing_formula,
+            mechanical_rules=mechanical_rules,
+            evidence_anchoring=evidence_anchoring,
+            diagnostic_style=diagnostic_style,
+            reframing_moves=reframing_moves,
             examples=examples
         )
-
+    
     try:
         result = LLMSingleton.get().invoke(prompt)
         content = result.content

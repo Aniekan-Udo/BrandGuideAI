@@ -26,7 +26,6 @@ celery_app = Celery(
 
 from kombu import Queue, Exchange
 
-rag_exchange = Exchange("rag_refresh", type="direct")
 
 celery_app.conf.update(
     task_serializer="json",
@@ -64,10 +63,10 @@ r = get_redis()
 @celery_app.task(
     bind=True,
     name="tasks.generate_content",
-    max_retries=2,              # reduce from 3
+    max_retries=2,              
     default_retry_delay=10,
-    soft_time_limit=300,  # 5 minutes soft limit
-    time_limit=360          # graceful stop at 85s
+    soft_time_limit=300,  
+    time_limit=360         
 )
 def generate_content(
     self,
@@ -173,7 +172,9 @@ async def _run_graph(graph_flow, initial_state):
 
     try:
         async for chunk in graph_flow.astream(initial_state):
-            final_state.update(chunk)
+            for node_name, node_state in chunk.items():
+                if isinstance(node_state, dict):
+                    final_state.update(chunk)
 
             if stream_failed:
                 continue
@@ -262,6 +263,9 @@ def process_feedback(
                     "Retraining triggered business_id=%s unprocessed=%d",
                     business_id, unprocessed
                 )
+        
+        from human_loop import promote_to_brand_metrics
+        promote_to_brand_metrics(generation_id)
 
         return {"status": "saved", "generation_id": generation_id}
 
@@ -302,6 +306,27 @@ def retrain(self, business_id, content_type):
 
     finally:
         lock.release()
+
+
+@celery_app.task(bind=True, name="tasks.send_notification", max_retries=3, default_retry_delay=10)
+def send_notification(self, webhook_url: str, content: str, generation_id: str, topic: str):
+    import httpx
+    payload = {
+        "generation_id": generation_id,
+        "topic": topic,
+        "message": "Your content is ready for review.",
+        "preview": content[:300]
+    }
+    try:
+        with httpx.Client() as client:
+            response = client.post(webhook_url, json=payload, timeout=10)
+            response.raise_for_status()
+            logger.info("Notification sent for generation_id=%s", generation_id)
+            return True
+    except (httpx.HTTPError, httpx.RequestError) as e:
+        logger.error("Notification failed for generation_id=%s: %s", generation_id, e)
+        raise self.retry(exc=e, countdown=10)
+    
 
 
 @celery_app.task(

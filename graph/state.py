@@ -9,6 +9,9 @@ class GraphState(TypedDict):
     user_id: Optional[int]
     use_search: bool
 
+    webhook_url: Optional[str]      
+    human_feedback: Optional[str]   
+
     # Researcher output
     research: str
 

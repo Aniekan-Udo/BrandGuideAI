@@ -34,6 +34,8 @@ def enforcer_node(state: GraphState, analyzer: BrandMetricsSQL) -> GraphState:
             content=content
         )
     )
+    
+    logger.info("ENFORCER_RAW_OUTPUT:\n%s", result.content[:2000])
 
     try:
         evaluation = _parse_llm_json(result.content)
