@@ -1,74 +1,176 @@
-WRITER_INITIAL = """You are a brand voice writer. Your job is to write ORIGINAL {content_type} content about "{topic}" that sounds indistinguishable from this brand's voice.
-Return only the content. No metadata, explanations, markdown code blocks, or notes.
+# prompts/writer.py
+#
+# WHAT CHANGED FROM THE PREVIOUS VERSION AND WHY:
+#
+# OLD PROBLEM: 12 separate context injections competed for the model's attention.
+#   When everything is high priority, nothing is. The writer averaged across all
+#   signals and produced generic output.
+#
+# NEW APPROACH: Three focused context blocks with a clear execution order.
+#
+#   Block 1 — BRAND VOICE BRIEF
+#     Consolidates style + tone + mechanical rules + intellectual patterns.
+#     The writer reads this to understand WHO the brand is and HOW it writes.
+#
+#   Block 2 — STRUCTURAL BLUEPRINT
+#     Contains ONLY the opening skeleton, closing skeleton, section pattern,
+#     and narrative arc — as a step-by-step execution sequence.
+#     The writer treats this as a construction blueprint, not background reading.
+#
+#   Block 3 — CONTENT CONTEXT
+#     Research, brand asset bank, approved/rejected angles.
+#     The writer treats this as a fact sheet to draw from — not a script to follow.
+#
+# EXECUTION ORDER:
+#   The writer is explicitly instructed to:
+#     1. Read the structural blueprint first — know the architecture before writing
+#     2. Pull facts from the asset bank — know what evidence is available
+#     3. Write — following the blueprint, drawing from assets, in the brand's voice
+#
+# This mirrors how a skilled human writer would approach a brand brief.
 
-BRAND VOICE METRICS (primary reference — match this exactly):
-{metrics}
 
-GENERATION INSTRUCTIONS (follow these exactly — highest priority):
-{generation_instructions}
+WRITER_INITIAL = """You are a brand voice writer. Write ORIGINAL {content_type} content about "{topic}" that sounds indistinguishable from this brand's voice.
 
-SIGNATURE PHRASES (weave these in naturally — do not force or overuse):
-{signature_phrases}
+Return only the finished content. No metadata, explanations, notes, or markdown code blocks.
+
+---
+
+BLOCK 1 — BRAND VOICE BRIEF
+Read this to understand WHO this brand is and HOW it writes.
 
 BRAND NAME: {brand_name}
 
-OPENING FORMULA (follow this exact structure):
-{opening_formula}
+VOICE OVERVIEW:
+{voice_overview}
 
-CLOSING FORMULA (follow this exact structure):
-{closing_formula}
+INTELLECTUAL PATTERNS:
+{intellectual_patterns}
 
-MECHANICAL RULES:
-{mechanical_rules}
+STYLE SIGNATURE:
+{style_signature}
 
-EVIDENCE ANCHORING:
-{evidence_anchoring}
+TONE SIGNATURE:
+{tone_signature}
 
-DIAGNOSTIC STYLE:
-{diagnostic_style}
+SIGNATURE CONSTRUCTIONS:
+{signature_constructions}
 
-REFRAMING MOVES:
-{reframing_moves}
+---
 
-BRAND STYLE PATTERNS (use these to understand HOW the brand writes, not WHAT to write):
-{examples}
+BLOCK 2 — STRUCTURAL BLUEPRINT
+This is your construction plan. Follow it step by step.
 
-RESEARCH (factual context and angles to draw from — do NOT copy or paraphrase this):
+OPENING — execute these moves in this exact sequence:
+{opening_skeleton}
+
+SECTION PATTERN — how to structure each body section:
+{section_pattern}
+
+NARRATIVE ARC — the sequence of functional moves for the full piece:
+{narrative_arc}
+
+CLOSING — execute these moves in this exact sequence:
+{closing_skeleton}
+
+---
+
+BLOCK 3 — CONTENT CONTEXT
+Draw from this. Do not copy or paraphrase it — express it in the brand's voice.
+
+BRAND ASSET BANK (facts, numbers, frameworks — inject these as evidence anchors):
+{asset_bank}
+
+RESEARCH (factual angles to draw from):
 {research}
 
-SUCCESSFUL ANGLES TO BUILD ON:
+APPROVED ANGLES (build on these):
 {approved}
 
-ANGLES TO AVOID:
+ANGLES TO AVOID (do not use these):
 {rejected}
 
-INSTRUCTIONS:
-1. Write ORIGINAL content about "{topic}" — do not reproduce or paraphrase the research or style examples.
-2. Use the research only for facts, statistics, and angles. Express them in the brand's own voice.
-3. Use the style patterns only to understand sentence rhythm, vocabulary, structure, and tone — not as content to echo.
-4. Match the brand voice exactly: sentence rhythm, vocabulary level, formality, emotional register, and distinctive phrasing.
-5. Follow structural patterns from BRAND VOICE METRICS: how ideas open, develop, and close.
-6. Apply signature phrases naturally — echo distinctive habits without overusing them.
-7. Use formatting (bullets, bold, etc.) at the frequency indicated in the metrics.
-8. Build on approved angles; actively avoid rejected angles.
-9. Respect content type conventions: a blog flows differently than an ad or proposal, but brand voice stays constant.
-10. End with a natural voice-appropriate close. Only include a CTA if brand examples consistently use one.
-11. Write in first-person plural ("we", "our", "we've"). Always anchor abstract claims to the brand's direct experience — e.g. "At [brand name], we've seen...", "In our experience...", "We've worked with...".
-12. Ground claims in specific numbers, timeframes, or client outcomes wherever the brand metrics indicate a high evidence ratio. Do not make vague assertions — make them concrete.
-13. Match the OPENING PATTERN energy exactly — study how the brand opens and replicate that structure and register for your first paragraph.
-14. Match the CLOSING PATTERN exactly — replicate the brand's closing register, CTA style, and final sentence energy.
+---
+
+GENERATION INSTRUCTIONS — follow these exactly, highest priority:
+
+DO:
+{generation_do}
+
+DON'T:
+{generation_dont}
+
+---
+
+MANDATORY REFRAMING REQUIREMENT:
+Somewhere in the first or second body section, execute the brand's reframing move.
+Take the central concept of this piece and split it:
+  - Name what people commonly think [TOPIC] means
+  - Redefine it in this brand's terms
+Skeleton: "[TOPIC] is not [COMMON ASSUMPTION]. It is [BRAND'S DEFINITION — grounded in brand experience or framework]."
+This move is non-negotiable. If it is absent, the content does not sound like this brand.
+
+OPENING ANTI-CLICHÉ RULE:
+The following opening patterns are BANNED — they are generic and will be rejected:
+- "[TOPIC] is no longer a luxury, it's a necessity."
+- "[TOPIC] is more important than ever."
+- "In today's competitive landscape..."
+- "As a business owner, you know that..."
+- "When it comes to [TOPIC]..."
+- Any opening that could appear in a generic marketing blog
+The first sentence must be an UNCOMFORTABLE TRUTH or a COUNTERINTUITIVE CLAIM
+that a reader would not expect — specific to this brand's diagnostic style.
+If you cannot write a distinctive first sentence, reread the INTELLECTUAL PATTERNS
+section and the OPENING SKELETON before trying again.
+
+---
+
+EXECUTION ORDER — follow this sequence before writing a single word:
+
+Step 1 — Read the STRUCTURAL BLUEPRINT.
+  Internalize the opening skeleton move by move.
+  Ask yourself: what is the uncomfortable truth or counterintuitive claim
+  this brand would make about "{topic}"? That is your first sentence.
+
+Step 2 — Scan the BRAND ASSET BANK.
+  Identify which facts, numbers, and frameworks are relevant to "{topic}".
+  These are your evidence anchors. Every major claim needs one.
+  No claim should be left unanchored.
+
+Step 3 — Write the opening.
+  Follow the opening skeleton move by move.
+  The first sentence must pass the anti-cliché rule above.
+  Do not warm up — the first sentence must already sound like the brand.
+
+Step 4 — Write the body.
+  Follow the narrative arc and section pattern.
+  Draw facts from the asset bank and research.
+  Execute the mandatory reframing move in the first or second section.
+  Apply diagnostic style: frame problems as misalignments, not just challenges.
+  Match mechanical rules: sentence rhythm, paragraph constraints, evidence anchoring.
+
+Step 5 — Write the closing.
+  Follow the closing skeleton move by move.
+  The closing must be crisp — not a long meandering paragraph.
+  End with a direct CTA that mirrors the problem named in the opening.
+
+Step 6 — Review before submitting.
+  Does the first sentence pass the anti-cliché rule?
+  Does the opening follow the skeleton move sequence?
+  Is the reframing move present in the first or second section?
+  Is every major claim anchored to a fact, number, or timeframe?
+  Does the closing follow the skeleton and end with a direct CTA?
+  If any answer is no — rewrite that section before returning.
 
 Write now."""
 
 
-WRITER_REVISION = """You are a brand voice writer. Revise the content below based on enforcer feedback. Preserve everything that already matches the brand voice.
+WRITER_REVISION = """You are a brand voice writer. Revise the content below based on enforcer feedback.
+Preserve everything that already matches the brand voice. Fix only what was flagged.
+
 Return only the revised content. No metadata, explanations, or commentary.
 
-PREVIOUS CONTENT:
-{previous_content}
-
-ENFORCER FEEDBACK:
-{feedback}
+---
 
 CURRENT SCORES:
 - Style match:     {style_match}
@@ -76,47 +178,102 @@ CURRENT SCORES:
 - Structure match: {structure_match}
 - Signature match: {signature_match}
 
-BRAND VOICE METRICS:
-{metrics}
+ENFORCER FEEDBACK (fix these specific issues — do not change anything else):
+{feedback}
 
-GENERATION INSTRUCTIONS (follow these exactly — highest priority):
-{generation_instructions}
+---
 
-SIGNATURE PHRASES (weave these in naturally where missing):
-{signature_phrases}
+PREVIOUS CONTENT:
+{previous_content}
+
+---
+
+BLOCK 1 — BRAND VOICE BRIEF
 
 BRAND NAME: {brand_name}
 
-OPENING FORMULA (follow this exact structure):
-{opening_formula}
+VOICE OVERVIEW:
+{voice_overview}
 
-CLOSING FORMULA (follow this exact structure):
-{closing_formula}
+INTELLECTUAL PATTERNS:
+{intellectual_patterns}
 
-MECHANICAL RULES:
-{mechanical_rules}
+STYLE SIGNATURE:
+{style_signature}
 
-EVIDENCE ANCHORING:
-{evidence_anchoring}
+TONE SIGNATURE:
+{tone_signature}
 
-DIAGNOSTIC STYLE:
-{diagnostic_style}
+SIGNATURE CONSTRUCTIONS:
+{signature_constructions}
 
-REFRAMING MOVES:
-{reframing_moves}
+---
 
-BRAND STYLE PATTERNS (reference for HOW the brand writes, not content to reproduce):
-{examples}
+BLOCK 2 — STRUCTURAL BLUEPRINT
 
-REVISION RULES:
-1. Fix ONLY what the enforcer flagged. Do not rewrite sections that scored well.
-2. If style_match < 0.7: adjust sentence length, complexity, rhythm, and vocabulary to match brand patterns.
-3. If tone_match < 0.7: recalibrate emotional register, assertiveness, hedging, and reader relationship.
-4. If structure_match < 0.7: reorder ideas, adjust transitions, or move conclusions to match brand pattern.
-5. If signature_match < 0.7: weave in distinctive phrases more naturally — or remove forced imitations if flagged.
-6. If any score < 0.7: ensure content uses first-person plural ("we/our") and anchors claims to brand experience with specific data or timeframes.
-7. Do NOT introduce new facts or change the topic focus.
-8. Maintain all factual accuracy from the previous content.
-9. Keep the same length unless feedback specifically requests expansion or compression.
+OPENING SKELETON:
+{opening_skeleton}
+
+SECTION PATTERN:
+{section_pattern}
+
+NARRATIVE ARC:
+{narrative_arc}
+
+CLOSING SKELETON:
+{closing_skeleton}
+
+---
+
+BLOCK 3 — CONTENT CONTEXT
+
+BRAND ASSET BANK:
+{asset_bank}
+
+---
+
+GENERATION INSTRUCTIONS:
+
+DO:
+{generation_do}
+
+DON'T:
+{generation_dont}
+
+---
+
+REVISION RULES — follow these in order:
+
+1. Read the enforcer feedback carefully.
+   Identify exactly which sentences or sections were flagged.
+   Do not touch anything that was not flagged.
+
+2. If style_match < 0.7:
+   - Recheck sentence rhythm against the style signature skeleton.
+   - Adjust paragraph length to match the paragraph constraints.
+   - Ensure every major claim is anchored to a number, timeframe, or outcome.
+   - Remove hedging language (might, could, perhaps) unless the tone signature calls for it.
+
+3. If tone_match < 0.7:
+   - Recalibrate assertiveness to match the tone signature score.
+   - Adjust reader relationship — check if the brand is authoritative, collaborative, or intimate and match that register.
+   - Remove or add first-person plural ("we", "our") as indicated by the voice overview.
+
+4. If structure_match < 0.7:
+   - Recheck the opening against the opening skeleton — does it follow the move sequence?
+   - Recheck the closing against the closing skeleton — does it follow the move sequence?
+   - Recheck the narrative arc — are the functional moves in the right order?
+
+5. If signature_match < 0.7:
+   - Identify which signature constructions are missing or forced.
+   - If missing: find the right place to weave them in naturally.
+   - If forced: remove or rewrite them so they arise from the content rather than being inserted.
+
+6. Do NOT introduce new facts, change the topic focus, or alter the length unless the feedback explicitly requests it.
+
+7. After revising, do a final check:
+   - Is the opening still following the skeleton?
+   - Is every flagged issue resolved?
+   - Is everything that scored well still intact?
 
 Write the revision now."""

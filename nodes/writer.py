@@ -1,209 +1,163 @@
-# nodes/writer.py
-import logging
-from model import LLMSingleton
-from brand_rag import BrandRAG
-from learning_memory import FeedbackPortSQL
-from brand_metrics import BrandMetricsSQL
+# nodes/writer_node.py
+#
+# HOW THIS CONNECTS TO brand_metrics.py
+#
+# The writer node no longer manually slices the raw synthesis string.
+# It calls metrics.get_parsed_context() which returns a dict of named
+# sections, then maps those directly into WRITER_INITIAL / WRITER_REVISION.
+#
+# This means:
+#   - The writer always gets structured, named inputs — never a raw text blob
+#   - If the brand context changes (new documents, re-synthesis), the writer
+#     automatically picks up the new values on the next get_parsed_context() call
+#   - Revision uses the same context dict — no duplication
+
+
 from prompts.writer import WRITER_INITIAL, WRITER_REVISION
-from graph.state import GraphState
-
-logger = logging.getLogger(__name__)
-from utils.observe import observe
+from brand_metrics import BrandMetricsSQL
 
 
-
-
-DEFAULT_METRICS = {
-    "tone": "warm, conversational",
-    "perspective": "first-person plural (we/our)",
-    "style": "short punchy sentences",
-    "avoid": ["passive voice", "corporate jargon"]
-}
-
-GENERIC_EXAMPLES = """
-Example 1: Community-focused storytelling
-"We believe every customer should feel valued. Here's how we do it..."
-
-Example 2: Benefit-led messaging
-"Looking for sustainable fashion? Our new collection is here..."
-"""
-
-DEFAULT_PATTERNS = {
-    "approved": [],
-    "rejected": []
-}
-
-
-def _extract_opening(text: str) -> str:
-    """Extract the first 3 lines of a document as the opening pattern."""
-    lines = [l for l in text.strip().split('\n') if l.strip()]
-    return '\n'.join(lines[:3])
-
-
-def _extract_closing(text: str) -> str:
-    """Extract the last 3 lines of a document as the closing pattern."""
-    lines = [l for l in text.strip().split('\n') if l.strip()]
-    return '\n'.join(lines[-3:])
-
-
-def _extract_section(text: str, header: str) -> str:
+def writer_node(state: dict) -> dict:
     """
-    Extract a named section from the brand_brains synthesis text.
-    Sections are delimited by lines starting with '#'.
+    LangGraph writer node.
+
+    Reads brand context via get_parsed_context(), maps it into
+    WRITER_INITIAL, and writes the generated content back to state.
+
+    State fields consumed:
+        business_id     str
+        content_type    str
+        topic           str
+        research        str   — from researcher node
+        approved        str   — approved angles from previous enforcer runs
+        rejected        str   — rejected angles from previous enforcer runs
+
+    State fields produced:
+        content         str   — generated content
+        brand_context   dict  — parsed context dict, passed to enforcer
     """
-    lines = text.split('\n')
-    capture = False
-    result = []
-    for line in lines:
-        if header.upper() in line.upper():
-            capture = True
-            continue
-        if capture and line.strip().startswith('#'):
-            break
-        if capture:
-            result.append(line)
-    return '\n'.join(result).strip()
-
-
-def _build_examples_block(raw_examples: str) -> str:
-    """
-    Structure RAG examples into opening/closing pattern callouts
-    plus the full example for voice reference.
-    """
-    opening = _extract_opening(raw_examples)
-    closing = _extract_closing(raw_examples)
-    return f"""OPENING PATTERN — match this energy and structure for your opening:
-{opening}
-
-CLOSING PATTERN — match this for your closing:
-{closing}
-
-FULL EXAMPLE — study voice only, do not reproduce content:
-{raw_examples}"""
-
-
-@observe("writer_node")
-def writer_node(state: GraphState, rag: BrandRAG, analyzer: BrandMetricsSQL,
-                memory: FeedbackPortSQL) -> GraphState:
-    """
-    Generates or revises brand-consistent content.
-    """
-    topic        = state["topic"]
+    business_id = state["business_id"]
     content_type = state["content_type"]
-    research     = state["research"]
-    feedback     = state.get("feedback", "")
-    iteration    = state.get("iteration", 0) + 1
+    topic = state["topic"]
+    research = state.get("research", "")
+    approved = state.get("approved_angles", "")
+    rejected = state.get("rejected_angles", "")
 
-    try:
-        metrics = analyzer.get_context()
-    except Exception as e:
-        logger.warning("Metrics analyzer failed, using defaults: %s", e)
-        metrics = str(DEFAULT_METRICS)
+    # --- Load and parse brand context ---
+    metrics = BrandMetricsSQL(business_id=business_id, content_type=content_type)
+    ctx = metrics.get_parsed_context()
 
-    # Extract high-signal sections from brand brain for focused injection
-    generation_instructions = _extract_section(metrics, "GENERATION INSTRUCTIONS")
-    signature_phrases       = _extract_section(metrics, "SIGNATURE PHRASES")
-    brand_name              = _extract_section(metrics, "BRAND NAME")
-    
-    # NEW: Extract formulaic patterns
-    opening_formula         = _extract_section(metrics, "OPENING FORMULA")
-    closing_formula         = _extract_section(metrics, "CLOSING FORMULA")
-    mechanical_rules        = _extract_section(metrics, "MECHANICAL RULES")
-    evidence_anchoring      = _extract_section(metrics, "EVIDENCE ANCHORING")
-    diagnostic_style        = _extract_section(metrics, "DIAGNOSTIC STYLE")
-    reframing_moves         = _extract_section(metrics, "REFRAMING MOVES")
+    if not ctx:
+        # No brand context yet — cannot generate
+        return {**state, "content": "", "error": "No brand context available. Upload documents first."}
 
-    # Fall back gracefully if sections are missing (cold start / sparse brain)
-    if not generation_instructions:
-        generation_instructions = "Write in first-person plural (we/our). Be direct and authoritative. Ground claims in specific experience and data."
-    if not signature_phrases:
-        signature_phrases = "None extracted yet — rely on brand voice metrics above."
-    if not brand_name:
-        brand_name = "our agency"
-    
-    # NEW: Fallbacks for formulaic patterns
-    if not opening_formula:
-        opening_formula = "Open with a relatable observation, pivot to brand authority, end with a contrast."
-    if not closing_formula:
-        closing_formula = "Close with brand methodology, parallel contrast, and soft CTA."
-    if not mechanical_rules:
-        mechanical_rules = "Use standard paragraph structure."
-    if not evidence_anchoring:
-        evidence_anchoring = "Ground claims in specific numbers, timeframes, or client outcomes."
-    if not diagnostic_style:
-        diagnostic_style = "Diagnose problems as intention failures, not surface symptoms."
-    if not reframing_moves:
-        reframing_moves = "Redefine concepts by negation and contrast."
+    # --- Build the writer prompt ---
+    prompt = WRITER_INITIAL.format(
+        # Identity
+        brand_name=ctx.get("brand_name", ""),
+        content_type=content_type,
+        topic=topic,
 
-    try:
-        raw_examples = rag.query(topic)
-        examples = _build_examples_block(raw_examples)
-    except Exception as e:
-        logger.warning("RAG failed, using generic examples: %s", e)
-        examples = GENERIC_EXAMPLES
+        # Block 1 — Brand Voice Brief
+        voice_overview=ctx.get("brand_voice_overview", ""),
+        intellectual_patterns=ctx.get("intellectual_patterns", ""),
+        style_signature=ctx.get("style_signature", ""),
+        tone_signature=ctx.get("tone_signature", ""),
+        signature_constructions=ctx.get("signature_constructions", ""),
 
-    try:
-        patterns = memory.get_patterns(content_type)
-    except Exception as e:
-        logger.warning("Memory failed, using empty patterns: %s", e)
-        patterns = DEFAULT_PATTERNS
+        # Block 2 — Structural Blueprint
+        opening_skeleton=ctx.get("opening_skeleton", ""),
+        section_pattern=ctx.get("section_pattern", ""),
+        narrative_arc=ctx.get("narrative_arc", ""),
+        closing_skeleton=ctx.get("closing_skeleton", ""),
 
-    approved = [p["angle"] for p in patterns.get("approved", [])][:3]
-    rejected = [p["angle"] for p in patterns.get("rejected", [])][:2]
+        # Block 3 — Content Context
+        asset_bank=ctx.get("brand_asset_bank", ""),
+        research=research,
+        approved=approved,
+        rejected=rejected,
 
-    if iteration == 1:
-        prompt = WRITER_INITIAL.format(
-            topic=topic,
-            content_type=content_type,
-            research=research,
-            metrics=metrics,
-            generation_instructions=generation_instructions,
-            signature_phrases=signature_phrases,
-            brand_name=brand_name,
-            # NEW: Formulaic patterns
-            opening_formula=opening_formula,
-            closing_formula=closing_formula,
-            mechanical_rules=mechanical_rules,
-            evidence_anchoring=evidence_anchoring,
-            diagnostic_style=diagnostic_style,
-            reframing_moves=reframing_moves,
-            examples=examples,
-            approved="\n".join(approved) if approved else "None yet",
-            rejected="\n".join(rejected) if rejected else "None yet"
-        )
-    else:
-        prompt = WRITER_REVISION.format(
-            previous_content=state.get("content", ""),
-            feedback=feedback,
-            style_match=state.get("style_match", 0.0),
-            tone_match=state.get("tone_match", 0.0),
-            structure_match=state.get("structure_match", 0.0),
-            signature_match=state.get("signature_match", 0.0),
-            metrics=metrics,
-            generation_instructions=generation_instructions,
-            signature_phrases=signature_phrases,
-            brand_name=brand_name,
-            # NEW: Formulaic patterns
-            opening_formula=opening_formula,
-            closing_formula=closing_formula,
-            mechanical_rules=mechanical_rules,
-            evidence_anchoring=evidence_anchoring,
-            diagnostic_style=diagnostic_style,
-            reframing_moves=reframing_moves,
-            examples=examples
-        )
-    
-    try:
-        result = LLMSingleton.get().invoke(prompt)
-        content = result.content
-    except Exception as e:
-        logger.error("LLM failed: %s", e)
-        content = f"[System Error: Unable to generate content - {str(e)[:80]}]"
+        # Generation instructions
+        generation_do=ctx.get("generation_do", ""),
+        generation_dont=ctx.get("generation_dont", ""),
+    )
 
-    logger.info("Writer iteration=%d complete for topic=%r", iteration, topic)
+    # --- Call LLM ---
+    from model import LLMSingleton
+    llm = LLMSingleton.get("writer")
+    result = llm.invoke(prompt)
+    content = result.content.strip()
 
     return {
         **state,
         "content": content,
-        "iteration": iteration
+        "brand_context": ctx,   # pass parsed context to enforcer node
     }
+
+
+def writer_revision_node(state: dict) -> dict:
+    """
+    LangGraph writer revision node.
+
+    Called after enforcer rejects content. Uses WRITER_REVISION with
+    the same brand context dict already in state — no second DB/cache read.
+
+    State fields consumed (in addition to writer_node fields):
+        content         str   — previous content to revise
+        feedback        str   — enforcer feedback
+        style_match     float
+        tone_match      float
+        structure_match float
+        signature_match float
+        brand_context   dict  — parsed context from writer_node
+
+    State fields produced:
+        content         str   — revised content
+    """
+    ctx = state.get("brand_context", {})
+
+    if not ctx:
+        # Fallback: re-fetch if brand_context was not passed through state
+        metrics = BrandMetricsSQL(
+            business_id=state["business_id"],
+            content_type=state["content_type"],
+        )
+        ctx = metrics.get_parsed_context()
+
+    prompt = WRITER_REVISION.format(
+        # Scores and feedback
+        style_match=state.get("style_match", 0.0),
+        tone_match=state.get("tone_match", 0.0),
+        structure_match=state.get("structure_match", 0.0),
+        signature_match=state.get("signature_match", 0.0),
+        feedback=state.get("feedback", ""),
+        previous_content=state.get("content", ""),
+
+        # Block 1 — Brand Voice Brief
+        brand_name=ctx.get("brand_name", ""),
+        voice_overview=ctx.get("brand_voice_overview", ""),
+        intellectual_patterns=ctx.get("intellectual_patterns", ""),
+        style_signature=ctx.get("style_signature", ""),
+        tone_signature=ctx.get("tone_signature", ""),
+        signature_constructions=ctx.get("signature_constructions", ""),
+
+        # Block 2 — Structural Blueprint
+        opening_skeleton=ctx.get("opening_skeleton", ""),
+        section_pattern=ctx.get("section_pattern", ""),
+        narrative_arc=ctx.get("narrative_arc", ""),
+        closing_skeleton=ctx.get("closing_skeleton", ""),
+
+        # Block 3 — Asset Bank
+        asset_bank=ctx.get("brand_asset_bank", ""),
+
+        # Generation instructions
+        generation_do=ctx.get("generation_do", ""),
+        generation_dont=ctx.get("generation_dont", ""),
+    )
+
+    from model import LLMSingleton
+    llm = LLMSingleton.get("writer")
+    result = llm.invoke(prompt)
+    content = result.content.strip()
+
+    return {**state, "content": content}
