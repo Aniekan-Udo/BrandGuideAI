@@ -106,6 +106,7 @@ def generate_content(
             iteration=0,
             approved=False,
             feedback="",
+            flagged_passages="",
             score=0.0,
             generation_id=generation_id,
             status="pending"

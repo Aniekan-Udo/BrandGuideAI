@@ -16,7 +16,7 @@ from tenacity import (
 
 from database import BrandMetrics, get_db_session, BrandBrain
 from model import LLMSingleton
-from prompts.metrics import METRICS_EXTRACTION, METRICS_SYNTHESIS
+from prompts.metrics import METRICS_EXTRACTION, METRICS_SYNTHESIS, METRICS_SYNTHESIS_SINGLE, METRICS_SYNTHESIS_TEMPLATE
 
 logger = logging.getLogger(__name__)
 
@@ -270,14 +270,25 @@ class BrandMetricsSQL(MetricPort):
 
         profiles_block = self._format_profiles_for_synthesis(recent)
 
-        result = self._synthesis_llm.invoke(
-            METRICS_SYNTHESIS.format(
+        # Select appropriate synthesis prompt based on document count
+        if len(rows) == 1:
+            synthesis_prompt = METRICS_SYNTHESIS_SINGLE.format(
+                business_id=self.business_id,
+                content_type=self.content_type,
+                profiles=profiles_block,
+            )
+        else:
+            synthesis_prompt = METRICS_SYNTHESIS.format(
                 business_id=self.business_id,
                 content_type=self.content_type,
                 total_documents=len(rows),
                 profiles=profiles_block,
             )
-        )
+
+        # Append the output structure template
+        synthesis_prompt += "\n\n" + METRICS_SYNTHESIS_TEMPLATE
+
+        result = self._synthesis_llm.invoke(synthesis_prompt)
 
         context = result.content
     

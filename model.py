@@ -224,7 +224,7 @@ class ChatOllama(LLMModel):
         }
 
     def to_langchain(self):
-        from langchain_ollama import ChatOllama as LangChainOllama
+        from langchain_community.chat_models import ChatOllama as LangChainOllama
         return LangChainOllama(
             model=self._model,
             base_url=self._base_url,
@@ -235,15 +235,28 @@ class ChatOllama(LLMModel):
     def __repr__(self) -> str:
         return f"ChatOllama(model='{self.model}', temp={self.temperature})"
 
-# Singleton for LLMs
+# Singleton for LLMs — mode-aware with per-task temperature
 class LLMSingleton:
-    _instance = None
+    _instances: dict = {}
+
+    # Temperature tuned per task type:
+    # - extraction/enforcement: low temp for reliable structured JSON output
+    # - synthesis: moderate temp for analytical reasoning
+    # - generation: higher temp for creative writing
+    MODE_TEMPERATURES = {
+        "extraction":  0.1,
+        "enforcement": 0.1,
+        "synthesis":   0.3,
+        "generation":  0.7,
+    }
 
     @classmethod
     def get(cls, mode: str = "generation"):
-        if cls._instance is None:
-            cls._instance = ChatGroq(
+        if mode not in cls._instances:
+            temperature = cls.MODE_TEMPERATURES.get(mode, 0.7)
+            cls._instances[mode] = ChatGroq(
                 model="openai/gpt-oss-120b",
-                api_key=os.getenv("GROQ_API_KEY", "")
+                api_key=os.getenv("GROQ_API_KEY", ""),
+                temperature=temperature,
             ).to_langchain()
-        return cls._instance
+        return cls._instances[mode]

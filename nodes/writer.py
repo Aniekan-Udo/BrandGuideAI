@@ -34,28 +34,22 @@ DEFAULT_PATTERNS = {
 }
 
 
-def _extract_opening(text: str) -> str:
-    """Extract the first 3 lines of a document as the opening pattern."""
-    lines = [l for l in text.strip().split('\n') if l.strip()]
-    return '\n'.join(lines[:3])
-
-
-def _extract_closing(text: str) -> str:
-    """Extract the last 3 lines of a document as the closing pattern."""
-    lines = [l for l in text.strip().split('\n') if l.strip()]
-    return '\n'.join(lines[-3:])
-
-
 def _extract_section(text: str, header: str) -> str:
     """
     Extract a named section from the brand_brains synthesis text.
     Sections are delimited by lines starting with '#'.
+    
+    Matches by checking if the line (stripped of '#' and whitespace)
+    starts with the header — avoids partial matches like 'OPENING'
+    matching 'OPENING MOVE' inside section_patterns.
     """
     lines = text.split('\n')
     capture = False
     result = []
     for line in lines:
-        if header.upper() in line.upper():
+        # Normalize: strip '#' prefix and whitespace, then check if header matches
+        normalized = line.strip().lstrip('#').strip()
+        if normalized.upper().startswith(header.upper()):
             capture = True
             continue
         if capture and line.strip().startswith('#'):
@@ -63,23 +57,6 @@ def _extract_section(text: str, header: str) -> str:
         if capture:
             result.append(line)
     return '\n'.join(result).strip()
-
-
-def _build_examples_block(raw_examples: str) -> str:
-    """
-    Structure RAG examples into opening/closing pattern callouts
-    plus the full example for voice reference.
-    """
-    opening = _extract_opening(raw_examples)
-    closing = _extract_closing(raw_examples)
-    return f"""OPENING PATTERN — match this energy and structure for your opening:
-{opening}
-
-CLOSING PATTERN — match this for your closing:
-{closing}
-
-FULL EXAMPLE — study voice only, do not reproduce content:
-{raw_examples}"""
 
 
 @observe("writer_node")
@@ -101,17 +78,24 @@ def writer_node(state: GraphState, rag: BrandRAG, analyzer: BrandMetricsSQL,
         metrics = str(DEFAULT_METRICS)
 
     # Extract high-signal sections from brand brain for focused injection
+    # These are injected individually — we do NOT also inject the full metrics blob
+    # to avoid duplicate context that wastes tokens and confuses the model
     generation_instructions = _extract_section(metrics, "GENERATION INSTRUCTIONS")
-    signature_phrases       = _extract_section(metrics, "SIGNATURE PHRASES")
+    signature_phrases       = _extract_section(metrics, "SIGNATURE CONSTRUCTIONS")
     brand_name              = _extract_section(metrics, "BRAND NAME")
     
-    # NEW: Extract formulaic patterns
-    opening_formula         = _extract_section(metrics, "OPENING FORMULA")
-    closing_formula         = _extract_section(metrics, "CLOSING FORMULA")
+    # Formulaic patterns
+    opening_formula         = _extract_section(metrics, "OPENING PATTERN")
+    closing_formula         = _extract_section(metrics, "CLOSING PATTERN")
     mechanical_rules        = _extract_section(metrics, "MECHANICAL RULES")
-    evidence_anchoring      = _extract_section(metrics, "EVIDENCE ANCHORING")
+    evidence_anchoring      = _extract_section(metrics, "EVIDENCE PATTERN")
     diagnostic_style        = _extract_section(metrics, "DIAGNOSTIC STYLE")
     reframing_moves         = _extract_section(metrics, "REFRAMING MOVES")
+    
+    # New dimensions from improved extraction
+    pronoun_pattern         = _extract_section(metrics, "PRONOUN PATTERN")
+    qualification_style     = _extract_section(metrics, "QUALIFICATION STYLE")
+    tone_signature          = _extract_section(metrics, "TONE SIGNATURE")
 
     # Fall back gracefully if sections are missing (cold start / sparse brain)
     if not generation_instructions:
@@ -121,7 +105,7 @@ def writer_node(state: GraphState, rag: BrandRAG, analyzer: BrandMetricsSQL,
     if not brand_name:
         brand_name = "our agency"
     
-    # NEW: Fallbacks for formulaic patterns
+    # Fallbacks for formulaic patterns
     if not opening_formula:
         opening_formula = "Open with a relatable observation, pivot to brand authority, end with a contrast."
     if not closing_formula:
@@ -134,62 +118,85 @@ def writer_node(state: GraphState, rag: BrandRAG, analyzer: BrandMetricsSQL,
         diagnostic_style = "Diagnose problems as intention failures, not surface symptoms."
     if not reframing_moves:
         reframing_moves = "Redefine concepts by negation and contrast."
+    if not pronoun_pattern:
+        pronoun_pattern = "First-person plural (we/our) as dominant voice."
+    if not qualification_style:
+        qualification_style = "Qualify with experience ('in our experience') rather than hedging ('might', 'could')."
+    if not tone_signature:
+        tone_signature = "Semi-formal, confident, authoritative but not aggressive."
 
+    # RAG examples — injected as full voice reference only (no naive opening/closing extraction)
     try:
-        raw_examples = rag.query(topic)
-        examples = _build_examples_block(raw_examples)
+        examples = rag.query(topic)
+        if not examples:
+            examples = GENERIC_EXAMPLES
     except Exception as e:
         logger.warning("RAG failed, using generic examples: %s", e)
         examples = GENERIC_EXAMPLES
 
+    # Learning memory — approved/rejected patterns with feedback reasoning
     try:
         patterns = memory.get_patterns(content_type)
     except Exception as e:
         logger.warning("Memory failed, using empty patterns: %s", e)
         patterns = DEFAULT_PATTERNS
 
-    approved = [p["angle"] for p in patterns.get("approved", [])][:3]
-    rejected = [p["angle"] for p in patterns.get("rejected", [])][:2]
+    # Include feedback reasoning alongside angle labels (#14)
+    approved_entries = patterns.get("approved", [])[:3]
+    rejected_entries = patterns.get("rejected", [])[:2]
+    
+    approved_str = "\n".join(
+        f"- {p['angle']}" + (f" (feedback: {p['feedback']})" if p.get('feedback') else "")
+        for p in approved_entries
+    ) if approved_entries else "None yet"
+    
+    rejected_str = "\n".join(
+        f"- {p['angle']}" + (f" (reason: {p['feedback']})" if p.get('feedback') else "")
+        for p in rejected_entries
+    ) if rejected_entries else "None yet"
 
     if iteration == 1:
         prompt = WRITER_INITIAL.format(
             topic=topic,
             content_type=content_type,
             research=research,
-            metrics=metrics,
             generation_instructions=generation_instructions,
             signature_phrases=signature_phrases,
             brand_name=brand_name,
-            # NEW: Formulaic patterns
             opening_formula=opening_formula,
             closing_formula=closing_formula,
             mechanical_rules=mechanical_rules,
             evidence_anchoring=evidence_anchoring,
             diagnostic_style=diagnostic_style,
             reframing_moves=reframing_moves,
+            pronoun_pattern=pronoun_pattern,
+            qualification_style=qualification_style,
+            tone_signature=tone_signature,
             examples=examples,
-            approved="\n".join(approved) if approved else "None yet",
-            rejected="\n".join(rejected) if rejected else "None yet"
+            approved=approved_str,
+            rejected=rejected_str
         )
     else:
         prompt = WRITER_REVISION.format(
             previous_content=state.get("content", ""),
             feedback=feedback,
+            flagged_passages=state.get("flagged_passages", "No specific passages flagged."),
             style_match=state.get("style_match", 0.0),
             tone_match=state.get("tone_match", 0.0),
             structure_match=state.get("structure_match", 0.0),
             signature_match=state.get("signature_match", 0.0),
-            metrics=metrics,
             generation_instructions=generation_instructions,
             signature_phrases=signature_phrases,
             brand_name=brand_name,
-            # NEW: Formulaic patterns
             opening_formula=opening_formula,
             closing_formula=closing_formula,
             mechanical_rules=mechanical_rules,
             evidence_anchoring=evidence_anchoring,
             diagnostic_style=diagnostic_style,
             reframing_moves=reframing_moves,
+            pronoun_pattern=pronoun_pattern,
+            qualification_style=qualification_style,
+            tone_signature=tone_signature,
             examples=examples
         )
     

@@ -14,9 +14,9 @@ def build_graph(
     memory: FeedbackPortSQL,
 ) -> StateGraph:
 
-    researcher = partial(researcher_node, rag=rag, search=search)
+    researcher = partial(researcher_node, rag=rag, search=search, analyzer=analyzer)
     writer     = partial(writer_node, rag=rag, analyzer=analyzer, memory=memory)
-    enforcer   = partial(enforcer_node, analyzer=analyzer)
+    enforcer   = partial(enforcer_node, analyzer=analyzer, rag=rag)
     deployer   = partial(deployer_node, memory=memory)
 
     graph = StateGraph(GraphState)

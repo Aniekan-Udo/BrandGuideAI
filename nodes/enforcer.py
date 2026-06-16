@@ -3,6 +3,7 @@ import json
 import logging
 from model import LLMSingleton
 from brand_metrics import BrandMetricsSQL
+from brand_rag import BrandRAG
 from prompts.enforcer import ENFORCER_PROMPT
 from graph.state import GraphState
 
@@ -22,16 +23,25 @@ def _parse_llm_json(raw: str) -> dict:
 
 
 @observe("enforcer_node")
-def enforcer_node(state: GraphState, analyzer: BrandMetricsSQL) -> GraphState:
+def enforcer_node(state: GraphState, analyzer: BrandMetricsSQL, rag: BrandRAG = None) -> GraphState:
     content       = state["content"]
     metrics       = analyzer.get_context()
     iteration     = state.get("iteration", 1)
     max_iterations = 3
 
-    result = LLMSingleton.get().invoke(
+    # Retrieve brand voice examples for ground-truth comparison
+    examples = ""
+    if rag is not None:
+        try:
+            examples = rag.query(state.get("topic", "brand voice"))
+        except Exception as e:
+            logger.warning("RAG failed in enforcer, evaluating without examples: %s", e)
+
+    result = LLMSingleton.get("enforcement").invoke(
         ENFORCER_PROMPT.format(
             metrics=metrics,
-            content=content
+            content=content,
+            examples=examples if examples else "No brand style examples available — evaluate against metrics only."
         )
     )
     
@@ -40,15 +50,18 @@ def enforcer_node(state: GraphState, analyzer: BrandMetricsSQL) -> GraphState:
     try:
         evaluation = _parse_llm_json(result.content)
     except Exception:
-        logger.error("Failed to parse enforcer output, defaulting to approve")
+        # #13: Default to NOT approved on parse failure — don't rubber-stamp broken output
+        logger.error("Failed to parse enforcer output, defaulting to NOT approved")
         evaluation = {
-            "approved": True,
-            "score": 7.0,
+            "approved": False,
+            "score": 0.0,
             "style_match": 0.0,
             "tone_match": 0.0,
             "structure_match": 0.0,
             "signature_match": 0.0,
-            "feedback": "",
+            "dimension_details": {},
+            "flagged_passages": [],
+            "feedback": "Enforcer evaluation failed — content requires re-evaluation. Focus on matching the brand's opening/closing patterns, sentence rhythm, and signature constructions.",
             "creative_angle": "unknown"
         }
 
@@ -66,8 +79,8 @@ def enforcer_node(state: GraphState, analyzer: BrandMetricsSQL) -> GraphState:
             evaluation["feedback"] = (
                 "Content does not sufficiently match the brand voice. "
                 "Focus on: anchoring claims to brand experience with specific data, "
-                "using first-person plural (we/our), matching the brand's opening and closing patterns, "
-                "and weaving in signature phrases naturally."
+                "matching the brand's opening and closing patterns, "
+                "and weaving in signature constructions naturally."
             )
 
     # Hard cap — approve at max iterations regardless of score
@@ -86,6 +99,13 @@ def enforcer_node(state: GraphState, analyzer: BrandMetricsSQL) -> GraphState:
         iteration
     )
 
+    # Format flagged passages for the writer revision prompt
+    flagged = evaluation.get("flagged_passages", [])
+    if isinstance(flagged, list):
+        flagged_str = "\n".join(f"- {p}" for p in flagged) if flagged else "No specific passages flagged."
+    else:
+        flagged_str = str(flagged) if flagged else "No specific passages flagged."
+
     return {
         **state,
         "approved": evaluation["approved"],
@@ -95,5 +115,6 @@ def enforcer_node(state: GraphState, analyzer: BrandMetricsSQL) -> GraphState:
         "structure_match": evaluation.get("structure_match", 0.0),
         "signature_match": evaluation.get("signature_match", 0.0),
         "feedback": evaluation.get("feedback", ""),
+        "flagged_passages": flagged_str,
         "creative_angle": evaluation.get("creative_angle", "unknown")
     }

@@ -25,6 +25,7 @@ class GraphState(TypedDict):
     approved: bool
     score: float
     feedback: str
+    flagged_passages: str
     style_match: float
     tone_match: float
     structure_match: float
