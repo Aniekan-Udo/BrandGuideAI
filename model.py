@@ -243,7 +243,7 @@ class LLMSingleton:
     def get(cls, mode: str = "generation"):
         if cls._instance is None:
             cls._instance = ChatGroq(
-                model="llama-3.3-70b-versatile",
+                model="openai/gpt-oss-120b",
                 api_key=os.getenv("GROQ_API_KEY", "")
             ).to_langchain()
         return cls._instance

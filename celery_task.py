@@ -76,7 +76,8 @@ def generate_content(
     topic: str,
     format_type: str,
     user_id: int = None,
-    use_search: bool = False
+    use_search: bool = False,
+    human_feedback:str = False
 ):
     from brand_rag import BrandRAG, FastEmbedEmbedding
     from brand_metrics import BrandMetricsSQL
@@ -97,7 +98,8 @@ def generate_content(
             topic=topic,
             format_type=format_type,
             user_id=user_id,
-            use_search=use_search,   
+            use_search=use_search,  
+            human_feedback=human_feedback, 
             research="",
             content="",
             creative_angle="",
@@ -295,8 +297,8 @@ def retrain(self, business_id, content_type):
                         business_id=business_id,
                         content_type=content_type
                     )
-        analyzer._metrics_cache = None
-        analyzer._extract_metrics()
+        analyzer.invalidate_cache()
+        analyzer.build_and_cache_context()
 
         return {"status": "retrained", "business_id": business_id}
 
