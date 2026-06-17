@@ -320,7 +320,11 @@ async function triggerGeneration(e) {
                     if (chunk.content) {
                         // Render generated markdown/text to screen
                         fullGeneratedText = chunk.content;
-                        renderedDiv.innerText = fullGeneratedText;
+                        if (typeof marked !== 'undefined') {
+                            renderedDiv.innerHTML = marked.parse(fullGeneratedText);
+                        } else {
+                            renderedDiv.innerText = fullGeneratedText;
+                        }
                         outputBox.classList.remove('hidden');
                         // Scroll to output
                         renderedDiv.scrollTop = renderedDiv.scrollHeight;

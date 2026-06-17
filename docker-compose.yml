@@ -79,6 +79,7 @@ services:
       FASTEMBED_CACHE_PATH: /tmp/fastembed_cache
     volumes:
       - fastembed_cache:/tmp/fastembed_cache
+      - ./static:/app/static
     depends_on:
       postgres:
         condition: service_healthy

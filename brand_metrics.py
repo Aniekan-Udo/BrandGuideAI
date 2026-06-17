@@ -350,11 +350,23 @@ class BrandMetricsSQL(MetricPort):
                 business_id=self.business_id,
                 content_type=self.content_type,
             ).first()
-            if brain:
+            
+            # Count the actual number of extracted metric rows in the DB
+            metrics_count = session.query(BrandMetrics).filter_by(
+                business_id=self.business_id,
+                content_type=self.content_type,
+            ).count()
+
+            # Only serve the Postgres brain if it is fully up to date
+            if brain and brain.profile_count == metrics_count:
                 # Warm cache
                 self._redis.set(self._cache_key, brain.synthesis_text, ex=CACHE_TTL)
                 return brain.synthesis_text
-        
+            elif brain:
+                logger.info(
+                    "Postgres brain is stale (brain_profiles=%s, actual_metrics=%s) — rebuilding",
+                    brain.profile_count, metrics_count
+                )
         
         return self.build_and_cache_context()
 

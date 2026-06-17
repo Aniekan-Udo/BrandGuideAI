@@ -92,6 +92,16 @@ def writer_node(state: GraphState, rag: BrandRAG, analyzer: BrandMetricsSQL,
     diagnostic_style        = _extract_section(metrics, "DIAGNOSTIC STYLE")
     reframing_moves         = _extract_section(metrics, "REFRAMING MOVES")
     
+    # Structural patterns — combine signature constructions + thinking templates
+    # for a complete picture of the brand's canonical structural moves
+    structural_patterns = _extract_section(metrics, "SIGNATURE CONSTRUCTIONS")
+    thinking_templates  = _extract_section(metrics, "THINKING TEMPLATES")
+    canonical_formula   = _extract_section(metrics, "CANONICAL STRUCTURAL FORMULA")
+    if thinking_templates:
+        structural_patterns = (structural_patterns + "\n\nTHINKING TEMPLATES:\n" + thinking_templates) if structural_patterns else thinking_templates
+    if canonical_formula:
+        structural_patterns = (structural_patterns + "\n\nCANONICAL STRUCTURAL FORMULA:\n" + canonical_formula) if structural_patterns else canonical_formula
+    
     # New dimensions from improved extraction
     pronoun_pattern         = _extract_section(metrics, "PRONOUN PATTERN")
     qualification_style     = _extract_section(metrics, "QUALIFICATION STYLE")
@@ -124,6 +134,8 @@ def writer_node(state: GraphState, rag: BrandRAG, analyzer: BrandMetricsSQL,
         qualification_style = "Qualify with experience ('in our experience') rather than hedging ('might', 'could')."
     if not tone_signature:
         tone_signature = "Semi-formal, confident, authoritative but not aggressive."
+    if not structural_patterns:
+        structural_patterns = "No structural patterns extracted yet — follow the opening/closing formulas and generation instructions above."
 
     # RAG examples — injected as full voice reference only (no naive opening/closing extraction)
     try:
@@ -169,6 +181,7 @@ def writer_node(state: GraphState, rag: BrandRAG, analyzer: BrandMetricsSQL,
             evidence_anchoring=evidence_anchoring,
             diagnostic_style=diagnostic_style,
             reframing_moves=reframing_moves,
+            structural_patterns=structural_patterns,
             pronoun_pattern=pronoun_pattern,
             qualification_style=qualification_style,
             tone_signature=tone_signature,

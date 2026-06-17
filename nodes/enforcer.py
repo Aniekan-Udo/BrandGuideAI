@@ -67,7 +67,7 @@ def enforcer_node(state: GraphState, analyzer: BrandMetricsSQL, rag: BrandRAG = 
 
     # Force a revision cycle if score is below threshold and iterations remain
     # This prevents the enforcer from rubber-stamping weak first drafts
-    MIN_SCORE = 7.5
+    MIN_SCORE = 8.0
     if evaluation.get("score", 0.0) < MIN_SCORE and iteration < max_iterations:
         logger.info(
             "Score %.1f below threshold %.1f at iteration %d — forcing revision",

@@ -11,6 +11,18 @@ OPENING FORMULA (replicate this exact structural sequence for your opening):
 CLOSING FORMULA (replicate this exact structural sequence for your closing):
 {closing_formula}
 
+CRITICAL STRUCTURAL PATTERNS (you MUST include ALL of these — these are the brand's canonical constructions extracted from their actual writing):
+{structural_patterns}
+
+For EACH pattern above:
+→ Reproduce it in its EXACT canonical form as described. Do NOT paraphrase or simplify the form.
+→ If it specifies a multi-sentence structure, use that exact number of sentences.
+→ If it includes a skeleton, follow that skeleton precisely with your own original content.
+
+EVIDENCE ANCHORING RULE:
+{evidence_anchoring}
+→ Every numbered/listed item MUST embed a brand-specific social proof block from the brand's own experience. Do NOT substitute with generic industry statistics.
+
 GENERATION INSTRUCTIONS (follow these exactly):
 {generation_instructions}
 
@@ -64,24 +76,27 @@ ANGLES TO AVOID:
 INSTRUCTIONS (in priority order)
 ═══════════════════════════════════════════════════
 
-CRITICAL — match the opening and closing patterns EXACTLY:
-1. Match the OPENING PATTERN energy and structure exactly — study the formula above and replicate that structural sequence and register for your first paragraph.
-2. Match the CLOSING PATTERN exactly — replicate the brand's closing register, CTA style, and final sentence energy.
+CRITICAL — match the structural patterns EXACTLY:
+1. Your content MUST contain the tripartite negation-reframe in the three-sentence "X isn't Y. It isn't Z. It's W." form. This is non-negotiable.
+2. Your content MUST contain the parallel contrast close in the "doesn't just X. Y that Z." form. This is non-negotiable.
+3. Every numbered item MUST embed a brand-specific social proof block with exact client count and outcome percentage. Do NOT use generic industry statistics.
+4. Match the OPENING PATTERN energy and structure exactly — study the formula AND the inline example above.
+5. Match the CLOSING PATTERN exactly — process mention + parallel contrast + short question CTA + "Let's talk."
 
 VOICE — inhabit the brand's writing mechanics:
-3. Match sentence rhythm, vocabulary level, formality, emotional register, and distinctive phrasing from the generation instructions.
-4. Follow the pronoun pattern — use the specified pronouns in the specified contexts. Anchor abstract claims to the brand's direct experience.
-5. Apply the qualification style — qualify claims exactly as the brand does (with data, with experience, or with assertion). Do not hedge with words the brand avoids.
-6. Apply signature phrases naturally — echo distinctive habits without overusing them.
-7. Ground claims in specific numbers, timeframes, or client outcomes as specified by the evidence anchoring rules. Do not make vague assertions.
+6. Match sentence rhythm, vocabulary level, formality, emotional register, and distinctive phrasing from the generation instructions.
+7. Follow the pronoun pattern — use the specified pronouns in the specified contexts. Anchor abstract claims to the brand's direct experience.
+8. Apply the qualification style — qualify claims exactly as the brand does (with data, with experience, or with assertion). Do not hedge with words the brand avoids.
+9. Apply signature phrases naturally — echo distinctive habits without overusing them.
+10. Ground claims in specific numbers, timeframes, or client outcomes as specified by the evidence anchoring rules. Do not make vague assertions.
 
 CONTENT — write original material:
-8. Write ORIGINAL content about "{topic}" — do not reproduce or paraphrase the research or style examples.
-9. Use the research only for facts, statistics, and angles. Express them in the brand's own voice.
-10. Use the style examples only to understand sentence rhythm, vocabulary, structure, and tone — not as content to echo.
-11. Build on approved angles; actively avoid rejected angles.
-12. Respect content type conventions: a {content_type} flows differently than other formats, but brand voice stays constant.
-13. Use formatting (bullets, bold, etc.) at the frequency specified in the mechanical rules.
+11. Write ORIGINAL content about "{topic}" — do not reproduce or paraphrase the research or style examples.
+12. Use the research only for facts, statistics, and angles. Express them in the brand's own voice.
+13. Use the style examples only to understand sentence rhythm, vocabulary, structure, and tone — not as content to echo.
+14. Build on approved angles; actively avoid rejected angles.
+15. Respect content type conventions: a {content_type} flows differently than other formats, but brand voice stays constant.
+16. Use formatting (bullets, bold, etc.) at the frequency specified in the mechanical rules.
 
 Write now."""
 

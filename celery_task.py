@@ -48,6 +48,7 @@ celery_app.conf.update(
         "tasks.refresh_rag":                 {"queue": "rag_refresh"},
         "tasks.extract_metrics":             {"queue": "rag_refresh"},  
         "tasks.promote_generation_feedback": {"queue": "rag_refresh"},  
+        "tasks.synthesize_metrics":          {"queue": "rag_refresh"},
     }
 )
 
@@ -166,12 +167,20 @@ def generate_content(
 
 async def _run_graph(graph_flow, initial_state):
     from redis.asyncio import Redis
+    import asyncio
 
     async_redis = Redis(host="redis", port=6379, decode_responses=True)
 
     final_state = dict(initial_state)
     generation_id = initial_state['generation_id']
+    business_id = initial_state['business_id']
+    content_type = initial_state['content_type']
     stream_failed = False
+
+    debounce_key = f"debounce_synthesis:{business_id}:{content_type}"
+    while await async_redis.exists(debounce_key):
+        logger.info("Documents are processing. Pausing generation for %s...", business_id)
+        await asyncio.sleep(5)
 
     try:
         async for chunk in graph_flow.astream(initial_state):
@@ -386,16 +395,17 @@ def extract_metrics(self, business_id: str, content_type: str, doc_id: int, doc_
         if not inserted:
             return {"status": "skipped", "reason": "already_extracted"}
 
-        lock_key = f"context_rebuild:{business_id}:{content_type}"
-        lock = redis_client.lock(lock_key, timeout=180)
-        if not lock.acquire(blocking=True, blocking_timeout=30):
-            return {"status": "complete", "synthesis": "deferred"}
-        try:
-            analyzer.build_and_cache_context()
-        finally:
-            lock.release()
+        analyzer.invalidate_cache()
+        debounce_key = f"debounce_synthesis:{business_id}:{content_type}"
+        
+        if redis_client.set(debounce_key, "1", nx=True, ex=15):
+            synthesize_metrics.apply_async(
+                kwargs={"business_id": business_id, "content_type": content_type},
+                countdown=15
+            )
+            logger.info("Queued debounced synthesis for %s", business_id)
 
-        return {"status": "complete", "business_id": business_id, "doc_id": doc_id}
+        return {"status": "complete", "business_id": business_id, "doc_id": doc_id, "synthesis": "debounced"}
     except Exception as exc:
         raise self.retry(exc=exc, countdown=10)
 
@@ -412,14 +422,38 @@ def promote_generation_feedback(self, business_id: str, content_type: str, gener
         if not inserted:
             return {"status": "skipped", "reason": "already_processed"}
 
-        lock_key = f"context_rebuild:{business_id}:{content_type}"
-        lock = redis_client.lock(lock_key, timeout=180)
-        if lock.acquire(blocking=True, blocking_timeout=30):
-            try:
-                analyzer.build_and_cache_context()
-            finally:
-                lock.release()
+        analyzer.invalidate_cache()
+        debounce_key = f"debounce_synthesis:{business_id}:{content_type}"
+        
+        if redis_client.set(debounce_key, "1", nx=True, ex=15):
+            synthesize_metrics.apply_async(
+                kwargs={"business_id": business_id, "content_type": content_type},
+                countdown=15
+            )
+            logger.info("Queued debounced synthesis from feedback for %s", business_id)
 
-        return {"status": "complete", "score_weight": score_weight}
+        return {"status": "complete", "score_weight": score_weight, "synthesis": "debounced"}
     except Exception as exc:
         raise self.retry(exc=exc, countdown=30)
+
+
+@celery_app.task(bind=True, name="tasks.synthesize_metrics", max_retries=2, default_retry_delay=30)
+def synthesize_metrics(self, business_id: str, content_type: str):
+    lock_key = f"synthesize_lock:{business_id}:{content_type}"
+    lock = redis_client.lock(lock_key, timeout=180)
+    
+    if not lock.acquire(blocking=False):
+        logger.info("Synthesis already running for %s, skipping", business_id)
+        return {"status": "skipped", "reason": "already_running"}
+        
+    try:
+        from brand_metrics import BrandMetricsSQL
+        analyzer = BrandMetricsSQL(business_id=business_id, content_type=content_type)
+        logger.info("Running debounced synthesis for %s", business_id)
+        analyzer.build_and_cache_context()
+        return {"status": "complete", "business_id": business_id}
+    except Exception as exc:
+        logger.error("Debounced synthesis failed for %s: %s", business_id, exc)
+        raise self.retry(exc=exc, countdown=30)
+    finally:
+        lock.release()

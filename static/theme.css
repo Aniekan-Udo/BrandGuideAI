@@ -260,8 +260,10 @@ input, select, textarea, button {
 }
 
 .auth-card {
-    background-color: var(--bg-card);
-    border: 1px solid var(--border-color);
+    background-color: rgba(18, 18, 23, 0.7);
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
+    border: 1px solid rgba(255, 255, 255, 0.08);
     border-radius: var(--border-radius-lg);
     width: 100%;
     max-width: 400px;
@@ -632,8 +634,10 @@ input, select, textarea, button {
 }
 
 .stat-card {
-    background-color: var(--bg-card);
-    border: 1px solid var(--border-color);
+    background-color: rgba(18, 18, 23, 0.6);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    border: 1px solid rgba(255, 255, 255, 0.05);
     padding: 24px;
     border-radius: var(--border-radius-lg);
     display: flex;
@@ -691,8 +695,10 @@ input, select, textarea, button {
 }
 
 .content-card {
-    background-color: var(--bg-card);
-    border: 1px solid var(--border-color);
+    background-color: rgba(18, 18, 23, 0.6);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    border: 1px solid rgba(255, 255, 255, 0.05);
     border-radius: var(--border-radius-lg);
     padding: 30px;
     display: flex;
