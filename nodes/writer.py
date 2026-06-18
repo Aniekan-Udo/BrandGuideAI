@@ -8,6 +8,7 @@ from prompts.writer import WRITER_INITIAL, WRITER_REVISION
 from graph.state import GraphState
 
 logger = logging.getLogger(__name__)
+import re
 from utils.observe import observe
 
 
@@ -59,6 +60,33 @@ def _extract_section(text: str, header: str) -> str:
     return '\n'.join(result).strip()
 
 
+
+def _extract_asset_bank(metrics: str) -> str:
+    """
+    Extract the BRAND ASSET BANK section and format it as an explicit
+    closed list of permitted claims for injection into the writer prompt.
+    This prevents the writer from hallucinating client counts, percentages,
+    and named frameworks by giving it only the facts it is allowed to use.
+    """
+    match = re.search(
+        r"#\s*BRAND ASSET BANK\s*\n(.*?)(?=\n#\s+[A-Z]|\Z)",
+        metrics,
+        re.DOTALL | re.IGNORECASE
+    )
+    if not match:
+        return (
+            "No asset bank available yet. "
+            "Do NOT invent specific numbers, client counts, percentages, or ROI figures. "
+            "Use only general brand observations without specific data points."
+        )
+    asset_text = match.group(1).strip()
+    return (
+        "PERMITTED SOCIAL PROOF CLAIMS — use ONLY these exact numbers and facts when writing brand experience claims.\n"
+        "Do NOT invent any number, percentage, client count, or framework name not listed here.\n\n"
+        + asset_text
+    )
+
+
 @observe("writer_node")
 def writer_node(state: GraphState, rag: BrandRAG, analyzer: BrandMetricsSQL,
                 memory: FeedbackPortSQL) -> GraphState:
@@ -106,6 +134,9 @@ def writer_node(state: GraphState, rag: BrandRAG, analyzer: BrandMetricsSQL,
     pronoun_pattern         = _extract_section(metrics, "PRONOUN PATTERN")
     qualification_style     = _extract_section(metrics, "QUALIFICATION STYLE")
     tone_signature          = _extract_section(metrics, "TONE SIGNATURE")
+
+    # Extract permitted claims asset bank — passed explicitly to prevent hallucination
+    asset_bank = _extract_asset_bank(metrics)
 
     # Fall back gracefully if sections are missing (cold start / sparse brain)
     if not generation_instructions:
@@ -187,7 +218,8 @@ def writer_node(state: GraphState, rag: BrandRAG, analyzer: BrandMetricsSQL,
             tone_signature=tone_signature,
             examples=examples,
             approved=approved_str,
-            rejected=rejected_str
+            rejected=rejected_str,
+            asset_bank=asset_bank
         )
     else:
         prompt = WRITER_REVISION.format(
@@ -210,7 +242,8 @@ def writer_node(state: GraphState, rag: BrandRAG, analyzer: BrandMetricsSQL,
             pronoun_pattern=pronoun_pattern,
             qualification_style=qualification_style,
             tone_signature=tone_signature,
-            examples=examples
+            examples=examples,
+            asset_bank=asset_bank
         )
     
     try:

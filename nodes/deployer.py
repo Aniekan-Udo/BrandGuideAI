@@ -101,5 +101,5 @@ def deployer_node(state: GraphState, memory: FeedbackPortSQL) -> GraphState:
 
     return {
         **state,
-        "status": "complete"
+        "status": "completed"
     }

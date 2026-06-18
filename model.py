@@ -235,7 +235,68 @@ class ChatOllama(LLMModel):
     def __repr__(self) -> str:
         return f"ChatOllama(model='{self.model}', temp={self.temperature})"
 
-# Singleton for LLMs — mode-aware with per-task temperature
+class ChatGemini(LLMModel):
+    def __init__(
+        self,
+        model: str = "gemini-2.5-flash",
+        api_key: str = "",
+        temperature: float = 0.1,
+        max_tokens: int = 8192,
+        top_p: float = 1.0
+    ):
+        if not api_key.strip():
+            raise ValueError("Google API key required")
+        self._model = model
+        self._api_key = api_key
+        self._temperature = temperature
+        self._max_tokens = max_tokens
+        self._top_p = top_p
+
+    @property
+    def source(self) -> str:
+        return "ChatGemini"
+
+    @property
+    def model(self) -> str:
+        return self._model
+
+    @property
+    def api_key(self) -> str:
+        return self._api_key
+
+    @property
+    def temperature(self) -> float:
+        return self._temperature
+
+    @property
+    def max_tokens(self) -> int:
+        return self._max_tokens
+
+    @property
+    def top_p(self) -> float:
+        return self._top_p
+
+    def to_params(self) -> Dict[str, Any]:
+        return {
+            "model": self.model,
+            "temperature": self.temperature,
+            "max_output_tokens": self.max_tokens,
+        }
+
+    def to_langchain(self):
+        from langchain_google_genai import ChatGoogleGenerativeAI
+        return ChatGoogleGenerativeAI(
+            model=self._model,
+            google_api_key=self._api_key,
+            temperature=self._temperature,
+            max_output_tokens=self._max_tokens,
+        )
+
+    def __repr__(self) -> str:
+        return f"ChatGemini(model='{self.model}', temp={self.temperature})"
+
+
+# Singleton for LLMs — mode-aware with per-task temperature and model routing
 class LLMSingleton:
     _instances: dict = {}
 
@@ -250,13 +311,33 @@ class LLMSingleton:
         "generation":  0.7,
     }
 
+    # Modes that use Gemini (frontier) instead of Groq
+    GEMINI_MODES = {"enforcement", "extraction", "synthesis"}
+
     @classmethod
     def get(cls, mode: str = "generation"):
         if mode not in cls._instances:
             temperature = cls.MODE_TEMPERATURES.get(mode, 0.7)
-            cls._instances[mode] = ChatGroq(
-                model="openai/gpt-oss-120b",
-                api_key=os.getenv("GROQ_API_KEY", ""),
-                temperature=temperature,
-            ).to_langchain()
+            
+            # Ensure an event loop exists for async clients initialized in synchronous threads
+            import asyncio
+            try:
+                asyncio.get_event_loop()
+            except RuntimeError:
+                asyncio.set_event_loop(asyncio.new_event_loop())
+
+            if mode in cls.GEMINI_MODES and os.getenv("GOOGLE_API_KEY", "").strip():
+                print(f"🤖 [LLMSingleton] Routing mode '{mode}' to GEMINI 2.5 FLASH")
+                cls._instances[mode] = ChatGemini(
+                    model=os.getenv("GEMINI_MODEL", "gemini-2.5-flash"),
+                    api_key=os.getenv("GOOGLE_API_KEY", ""),
+                    temperature=temperature,
+                ).to_langchain()
+            else:
+                print(f"🤖 [LLMSingleton] Routing mode '{mode}' to GROQ")
+                cls._instances[mode] = ChatGroq(
+                    model="openai/gpt-oss-120b",
+                    api_key=os.getenv("GROQ_API_KEY", ""),
+                    temperature=temperature,
+                ).to_langchain()
         return cls._instances[mode]

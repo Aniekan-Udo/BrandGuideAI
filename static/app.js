@@ -65,7 +65,7 @@ function hideAuthGate() {
 function switchAuthTab(tabName) {
     document.querySelectorAll('.auth-tab').forEach(btn => btn.classList.remove('active'));
     document.querySelectorAll('.auth-form').forEach(form => form.classList.remove('active'));
-    
+
     if (tabName === 'login') {
         document.getElementById('tab-login').classList.add('active');
         document.getElementById('form-login').classList.add('active');
@@ -167,14 +167,14 @@ async function initSession() {
         }
 
         appState.user = await response.json();
-        
+
         // Update user interfaces
         document.getElementById('display-user-fullname').innerText = `${appState.user.first_name} ${appState.user.last_name}`;
         document.getElementById('display-business-id').innerText = appState.user.business_id;
-        
+
         hideAuthGate();
         switchPanel('dashboard');
-        
+
         // Initial dashboard data loading
         loadRecentGenerations();
         loadUploadedDocsList();
@@ -191,15 +191,15 @@ async function initSession() {
 
 function switchPanel(panelId) {
     appState.activePanel = panelId;
-    
+
     // Switch Sidebar Navigation Active state
     document.querySelectorAll('.nav-item').forEach(item => item.classList.remove('active'));
     document.getElementById(`nav-${panelId}`).classList.add('active');
-    
+
     // Toggle Section Panel visibilities
     document.querySelectorAll('.dashboard-panel').forEach(panel => panel.classList.remove('active'));
     document.getElementById(`panel-${panelId}`).classList.add('active');
-    
+
     // Update Page Header Titles
     const titleMap = {
         'dashboard': { t: 'Dashboard Overview', s: 'Track and configure your brand voice rules, generation capacity, and memory metrics.' },
@@ -207,7 +207,7 @@ function switchPanel(panelId) {
         'documents': { t: 'Guidelines & Reference Documents', s: 'Manage reference text sources mapped to feed the Brand Memory vectors.' },
         'patterns': { t: 'Active Model Memory & Synapses', s: 'Explore brand-aligned guidelines and restrictions synthesized directly from human review loops.' }
     };
-    
+
     document.getElementById('page-title').innerText = titleMap[panelId].t;
     document.getElementById('page-subtitle').innerText = titleMap[panelId].s;
 
@@ -227,25 +227,25 @@ function selectFormatCard(input) {
 
 async function triggerGeneration(e) {
     e.preventDefault();
-    
+
     const contentType = document.querySelector('input[name="content_type"]:checked').value;
     const topic = document.getElementById('gen-topic').value;
     const formatType = document.getElementById('gen-format-type').value;
     const useSearch = document.getElementById('gen-use-search').checked;
-    
+
     const submitBtn = document.getElementById('btn-generate-submit');
     const statusBadge = document.getElementById('generation-status-badge');
     const consoleDiv = document.getElementById('stream-console');
     const outputBox = document.getElementById('generated-output-box');
     const renderedDiv = document.getElementById('rendered-content-text');
     const feedbackBox = document.getElementById('feedback-card-container');
-    
+
     // Reset output UIs
     consoleDiv.innerHTML = '';
     renderedDiv.innerHTML = '';
     outputBox.classList.add('hidden');
     feedbackBox.classList.add('hidden');
-    
+
     submitBtn.disabled = true;
     submitBtn.classList.add('loading');
     statusBadge.innerText = 'Initializing';
@@ -285,7 +285,7 @@ async function triggerGeneration(e) {
 
             buffer += decoder.decode(value, { stream: true });
             const lines = buffer.split('\n');
-            
+
             // Save last unfinished item in buffer
             buffer = lines.pop();
 
@@ -293,7 +293,7 @@ async function triggerGeneration(e) {
                 if (!line.trim()) continue;
                 try {
                     const chunk = JSON.parse(line);
-                    
+
                     // First chunk returns the generated UUID
                     if (chunk.generation_id && !generationId) {
                         generationId = chunk.generation_id;
@@ -302,35 +302,49 @@ async function triggerGeneration(e) {
                         continue;
                     }
 
+                    // LangGraph returns chunks like {"node_name": {"content": "..."}}
+                    // We need to unwrap the inner state update object
+                    let stateUpdate = chunk;
+                    const keys = Object.keys(chunk);
+                    if (keys.length === 1 && typeof chunk[keys[0]] === 'object' && chunk[keys[0]] !== null) {
+                        stateUpdate = chunk[keys[0]];
+                    }
+
                     // Process graph execution states
-                    // Depending on what nodes are active in celery, log their info:
-                    if (chunk.research) {
-                        logConsole(`[Search Synthesis] Researched contexts: ${chunk.research.substring(0, 100)}...`);
+                    if (stateUpdate.research) {
+                        logConsole(`[Search Synthesis] Researched contexts: ${stateUpdate.research.substring(0, 100)}...`);
                     }
-                    if (chunk.creative_angle) {
+                    if (stateUpdate.creative_angle) {
                         statusBadge.innerText = 'Creating Angle';
-                        logConsole(`[Creative Director] Angle: ${chunk.creative_angle}`, 'highlight');
+                        logConsole(`[Creative Director] Angle: ${stateUpdate.creative_angle}`, 'highlight');
                     }
-                    if (chunk.status) {
-                        statusBadge.innerText = chunk.status.toUpperCase();
+                    if (stateUpdate.status) {
+                        statusBadge.innerText = stateUpdate.status.toUpperCase();
                     }
-                    if (chunk.score) {
-                        logConsole(`[Auditor Evaluator] Compliance Score: ${chunk.score} / 10`);
+                    if (stateUpdate.score) {
+                        logConsole(`[Auditor Evaluator] Compliance Score: ${stateUpdate.score} / 10`);
                     }
-                    if (chunk.content) {
+                    if (stateUpdate.content) {
                         // Render generated markdown/text to screen
-                        fullGeneratedText = chunk.content;
-                        if (typeof marked !== 'undefined') {
-                            renderedDiv.innerHTML = marked.parse(fullGeneratedText);
-                        } else {
+                        fullGeneratedText = stateUpdate.content;
+                        try {
+                            if (typeof marked !== 'undefined' && typeof marked.parse === 'function') {
+                                renderedDiv.innerHTML = marked.parse(fullGeneratedText);
+                            } else if (typeof marked !== 'undefined' && typeof marked === 'function') {
+                                renderedDiv.innerHTML = marked(fullGeneratedText);
+                            } else {
+                                renderedDiv.innerText = fullGeneratedText;
+                            }
+                        } catch (renderErr) {
+                            logConsole(`Render error: ${renderErr.message}`, 'error');
                             renderedDiv.innerText = fullGeneratedText;
                         }
                         outputBox.classList.remove('hidden');
                         // Scroll to output
                         renderedDiv.scrollTop = renderedDiv.scrollHeight;
                     }
-                    if (chunk.feedback) {
-                        logConsole(`[Auditor Feedback] Revisions: ${chunk.feedback}`);
+                    if (stateUpdate.feedback) {
+                        logConsole(`[Auditor Feedback] Revisions: ${stateUpdate.feedback}`);
                     }
                 } catch (jsonErr) {
                     // Raw logs or text line fallback
@@ -343,14 +357,14 @@ async function triggerGeneration(e) {
         statusBadge.innerText = 'Completed';
         statusBadge.className = 'output-status';
         logConsole('Content synthesis completed successfully!', 'success');
-        
+
         // Show human quality feedback form
         feedbackBox.classList.remove('hidden');
-        
+
         // Save to active session generations list for stats
         appState.sessionGenerationsCount++;
         document.getElementById('stat-generations-count').innerText = appState.sessionGenerationsCount;
-        
+
         // Push generation object to our history helper array
         const timestamp = new Date().toLocaleTimeString();
         appState.generations.unshift({
@@ -362,7 +376,7 @@ async function triggerGeneration(e) {
             score: 'Pending human verification'
         });
         updateGenerationsListHTML();
-        
+
     } catch (err) {
         logConsole(`Error: ${err.message}`, 'error');
         statusBadge.innerText = 'Failed';
@@ -378,10 +392,10 @@ function logConsole(message, type = '') {
     const consoleDiv = document.getElementById('stream-console');
     const entry = document.createElement('div');
     entry.className = `console-log ${type}`;
-    
+
     const timestamp = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
     entry.innerHTML = `<span class="timestamp">[${timestamp}]</span> ${message}`;
-    
+
     consoleDiv.appendChild(entry);
     consoleDiv.scrollTop = consoleDiv.scrollHeight;
 }
@@ -405,13 +419,13 @@ function updateApproveBadge(checkbox) {
 
 async function submitFeedback(e) {
     e.preventDefault();
-    
+
     const generationId = document.getElementById('feedback-generation-id').value;
     const humanApproved = document.getElementById('feedback-human-approved').checked;
     const humanScore = parseFloat(document.getElementById('feedback-human-score').value);
     const humanFeedback = document.getElementById('feedback-comments').value;
     const contentType = document.querySelector('input[name="content_type"]:checked').value;
-    
+
     const submitBtn = document.getElementById('btn-submit-feedback');
     submitBtn.disabled = true;
     submitBtn.querySelector('span').innerText = 'Committing feedback...';
@@ -438,18 +452,18 @@ async function submitFeedback(e) {
         }
 
         showToast('Feedback submitted! Model alignment retrained.', 'success');
-        
+
         // Hide feedback container and clear comments
         document.getElementById('feedback-card-container').classList.add('hidden');
         document.getElementById('feedback-comments').value = '';
-        
+
         // Update status in history
         const genRecord = appState.generations.find(g => g.id === generationId);
         if (genRecord) {
             genRecord.score = `${humanScore}/10 (${humanApproved ? 'Approved' : 'Rejected'})`;
             updateGenerationsListHTML();
         }
-        
+
     } catch (err) {
         showToast(err.message, 'error');
     } finally {
@@ -491,12 +505,12 @@ async function uploadDocument(e) {
 
     const contentType = document.getElementById('upload-content-type').value;
     const submitBtn = document.getElementById('btn-upload-submit');
-    
+
     const formData = new FormData();
     formData.append('file', appState.selectedFile);
     formData.append('business_id', appState.user.business_id);
     formData.append('content_type', contentType);
-    
+
     submitBtn.disabled = true;
     submitBtn.querySelector('span').innerText = 'Processing & Vectorizing...';
 
@@ -516,18 +530,18 @@ async function uploadDocument(e) {
 
         const data = await response.json();
         showToast('Document vectorized successfully!', 'success');
-        
+
         // Add to mock session documents table
         appState.sessionDocsCount++;
         document.getElementById('stat-docs-count').innerText = appState.sessionDocsCount;
-        
+
         appState.uploadedDocs.unshift({
             filename: appState.selectedFile.name,
             contentType: contentType,
             date: new Date().toLocaleDateString(),
             status: 'Processing (Vectorized)'
         });
-        
+
         updateUploadedDocsTableHTML();
         clearSelectedFile();
     } catch (err) {
@@ -553,7 +567,7 @@ async function loadMemoryPatterns(contentType) {
 
     const approvedList = document.getElementById('approved-patterns-list');
     const rejectedList = document.getElementById('rejected-patterns-list');
-    
+
     approvedList.innerHTML = '<div class="empty-state"><i class="fa-solid fa-spinner fa-spin"></i><p>Querying guidelines databases...</p></div>';
     rejectedList.innerHTML = '<div class="empty-state"><i class="fa-solid fa-spinner fa-spin"></i><p>Querying alignment metrics...</p></div>';
 
@@ -569,11 +583,11 @@ async function loadMemoryPatterns(contentType) {
         }
 
         const data = await response.json();
-        
+
         // Update counts in dashboard sidebar card
         const approvedPatterns = data.patterns?.approved || [];
         const rejectedPatterns = data.patterns?.rejected || [];
-        
+
         document.getElementById('display-approved-rules-count').innerText = `${approvedPatterns.length} rules active`;
 
         // Render Approved patterns
@@ -636,7 +650,7 @@ function updateGenerationsListHTML() {
                 <div class="title">${gen.topic}</div>
                 <div class="meta">
                     <span><i class="fa-solid fa-layer-group"></i> ${gen.contentType.toUpperCase()}</span>
-                    <span><i class="fa-regular fa-id-card"></i> ${gen.id.substring(0,8)}...</span>
+                    <span><i class="fa-regular fa-id-card"></i> ${gen.id.substring(0, 8)}...</span>
                 </div>
             </div>
             <div class="history-score">
@@ -686,18 +700,18 @@ function showToast(message, type = 'info') {
     const container = document.getElementById('toast-container');
     const toast = document.createElement('div');
     toast.className = `toast ${type}`;
-    
+
     let icon = 'fa-circle-info';
     if (type === 'success') icon = 'fa-circle-check';
     if (type === 'error') icon = 'fa-circle-exclamation';
-    
+
     toast.innerHTML = `
         <i class="fa-solid ${icon}"></i>
         <span>${message}</span>
     `;
-    
+
     container.appendChild(toast);
-    
+
     // Auto-remove toast after 4s
     setTimeout(() => {
         toast.style.opacity = '0';

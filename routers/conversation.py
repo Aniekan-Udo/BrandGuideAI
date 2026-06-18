@@ -69,7 +69,7 @@ async def generate_stream(request: Request, body: GenerateRequest):
                         break
                 continue
 
-            yield chunk[1]
+            yield chunk[1] + "\n"
 
     return StreamingResponse(stream(), media_type="application/json")
 
@@ -103,9 +103,9 @@ async def health():
 
 @router.get("/patterns/{business_id}/{content_type}")
 async def get_patterns(business_id: str, content_type: str):
-    from learning_memory import LearningMemorySQL
+    from learning_memory import FeedbackPortSQL
 
-    memory = LearningMemorySQL(business_id=business_id)
+    memory = FeedbackPortSQL(business_id=business_id)
     patterns = memory.get_patterns(content_type)
 
     return {

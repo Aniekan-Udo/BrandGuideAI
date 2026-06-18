@@ -72,6 +72,17 @@ Below is an example of the depth and specificity expected for a hypothetical bra
     "call_to_action_pattern": "single",
     "cta_pattern": "single soft CTA as an inviting question at the very end; mirrors the problem named in the opening; uses first-person plural invitation verb"
   }},
+  "asset_bank": {{
+    "social_proof_claims": [
+      "<copy each specific social proof claim VERBATIM from the document — exact wording, exact numbers. These are factual claims the brand makes about its own experience. e.g. \'we\'ve built brand-aligned content frameworks for 84 B2B SaaS companies and found 250% higher ROI\'. Include ONLY claims that state a specific number, client count, percentage, or measurable outcome tied to the brand\'s direct experience. Do NOT include generic industry statistics.>"
+    ],
+    "named_frameworks": [
+      "<copy each named methodology, audit, or framework the brand owns VERBATIM — e.g. \'Vantage Pricing Audit\', \'Content Audit\', \'Deck Audit\'. Include only brand-owned names, not generic terms.>"
+    ],
+    "stated_values": [
+      "<copy each stated value or belief VERBATIM as it appears — e.g. \'Consistency beats creativity\', \'Authenticity is non-negotiable\'. Short declarative statements only.>"
+    ]
+  }},
   "signature_constructions": [
     "uses a two-part contrast sentence where part 1 names what content does and part 2 names what it actually is",
     "opens sections with a 'we + past tense + volume anchor' sentence to establish authority before making a claim",
@@ -159,6 +170,17 @@ Return ONLY a JSON object with no preamble or markdown. Use this schema:
     "call_to_action_pattern": "<none|single|repeated|pervasive>",
     "cta_pattern": "<describe HOW CTAs are written — the structural move. e.g. 'single soft CTA as an inviting question at the very end; mirrors the problem named in the opening; uses first-person plural invitation verb'>"
   }},
+  "asset_bank": {{
+    "social_proof_claims": [
+      "<copy each specific social proof claim VERBATIM from the document — exact wording, exact numbers. These are factual claims the brand makes about its own experience. e.g. \'we\'ve built brand-aligned content frameworks for 84 B2B SaaS companies and found 250% higher ROI\'. Include ONLY claims that state a specific number, client count, percentage, or measurable outcome tied to the brand\'s direct experience. Do NOT include generic industry statistics.>"
+    ],
+    "named_frameworks": [
+      "<copy each named methodology, audit, or framework the brand owns VERBATIM — e.g. \'Vantage Pricing Audit\', \'Content Audit\', \'Deck Audit\'. Include only brand-owned names, not generic terms.>"
+    ],
+    "stated_values": [
+      "<copy each stated value or belief VERBATIM as it appears — e.g. \'Consistency beats creativity\', \'Authenticity is non-negotiable\'. Short declarative statements only.>"
+    ]
+  }},
   "signature_constructions": [
     "<describe distinctive WRITING CONSTRUCTIONS — the move, not the phrase. e.g. 'uses a two-part contrast sentence where part 1 names what content does and part 2 names what it actually is', 'opens sections with a we + past tense + volume anchor sentence to establish authority before making a claim'>"
   ],
@@ -185,6 +207,7 @@ Rules:
 - State patterns with confidence where the profile is clear and specific.
 - Note "Needs more samples" only where the profile is genuinely ambiguous or contradictory — not merely because you have a single document.
 - A single well-written document can reveal sentence rhythm, tone, structure, pronoun patterns, and intellectual moves with high confidence.
+- BRAND ASSET BANK is a required section — aggregate all social_proof_claims, named_frameworks, and stated_values from all profiles. Preserve exact wording. Mark confidence level by frequency across profiles.
 - OPENING PATTERN and CLOSING PATTERN are the most critical sections — describe the structural moves precisely so any writer can execute them on any topic.
 - GENERATION INSTRUCTIONS must be entirely pattern-based — no content references, no quoted phrases, only structural and tonal mechanics a writer can apply to any topic.
 - Extract the brand name from the profile and include it explicitly.
@@ -214,6 +237,8 @@ Rules:
 - GENERATION INSTRUCTIONS must be entirely pattern-based — no content references, no quoted phrases, only structural and tonal mechanics a writer can apply to any topic.
 - Do not invent patterns not present in the source profiles. State "Insufficient data" where needed.
 - Extract the brand name from the profiles and include it explicitly.
+- BRAND ASSET BANK is a required section — aggregate all social_proof_claims, named_frameworks, and stated_values from all profiles. Preserve exact wording. Mark confidence level by frequency across profiles.
+
 
 Business: {business_id}
 Content type: {content_type}
@@ -230,6 +255,18 @@ METRICS_SYNTHESIS_TEMPLATE = """Structure your output exactly as follows:
 
 # BRAND NAME
 [The brand name extracted from documents. If not found: Not extracted — inject manually.]
+
+# BRAND ASSET BANK
+[Aggregate all asset_bank entries from all profiles. Deduplicate. For social_proof_claims: list only claims that appear in 2+ profiles as HIGH CONFIDENCE, 1 profile as LOW CONFIDENCE. For named_frameworks and stated_values: list all unique entries with their frequency count.]
+
+SOCIAL PROOF CLAIMS:
+- [VERBATIM claim — e.g. "we\'ve built brand-aligned content frameworks for 84 B2B SaaS companies and found 250% higher ROI"] (confidence: HIGH/LOW, appears in N/M profiles)
+
+NAMED FRAMEWORKS & METHODOLOGIES:
+- [VERBATIM framework name] (appears in N/M profiles)
+
+STATED VALUES & BELIEFS:
+- [VERBATIM value statement] (appears in N/M profiles)
 
 # BRAND VOICE OVERVIEW
 [2-3 sentences describing the brand's core writing identity in terms of HOW it writes — register, authority style, reader relationship, and intellectual stance. No content references.]

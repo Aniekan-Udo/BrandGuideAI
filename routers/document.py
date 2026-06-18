@@ -38,7 +38,7 @@ async def upload(
     except UnicodeDecodeError:
         raise HTTPException(status_code=400, detail="File must be UTF-8 encoded text")
 
-    if len(doc_content) > 100000: 
+    if len(doc_content) > 200000: 
         raise HTTPException(status_code=400, detail="File is too large")
 
     _idempotency_key = f"{business_id}:{create_idempotency_key(file_content)}"
