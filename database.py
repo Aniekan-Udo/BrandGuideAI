@@ -290,7 +290,7 @@ class ReviewerLearning(Model):
     content_type: Mapped[str] = mapped_column(String(50), index=True)
     format_type: Mapped[str] = mapped_column(String(100))
     generated_content: Mapped[str] = mapped_column(Text)
-    creative_angle: Mapped[str] = mapped_column(String(200))
+    creative_angle: Mapped[str] = mapped_column(Text)
     
     # Agent scoring
     agent_auto_score: Mapped[float] = mapped_column(DECIMAL(3, 1))

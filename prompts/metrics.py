@@ -3,101 +3,9 @@
 METRICS_EXTRACTION = """You are a document analyst. Analyze the document below and extract a precise writing intelligence profile that can be used to replicate HOW this brand writes — not WHAT it wrote.
 
 CRITICAL RULE: You are extracting PATTERNS, not content. Never copy sentences, phrases, or specific words from the document. Every field must describe the writing mechanics and structural moves in abstract, reusable terms.
+## OUTPUT REQUIREMENTS
 
-## EXEMPLAR
-
-Below is an example of the depth and specificity expected for a hypothetical brand. Your output must match this level of detail for every field:
-
-```json
-{{
-  "brand_name": "Vanguard Consulting",
-  "style": {{
-    "avg_sentence_length": "medium",
-    "sentence_complexity": "mixed",
-    "voice": "active",
-    "paragraph_length": "short",
-    "rhythm": "punchy",
-    "formality": 0.6,
-    "vocabulary_complexity": 0.5,
-    "use_of_jargon": "light",
-    "use_of_bullets_or_lists": "occasional",
-    "use_of_formatting": "light",
-    "numerical_density": "high",
-    "pronoun_pattern": "first-person plural dominant (we/our/we've); brand name used as subject in authority claims; second-person 'you/your' only when diagnosing reader problems",
-    "punctuation_habits": "heavy em-dash usage for parenthetical asides; no semicolons; rare exclamation marks (max 1 per piece); periods preferred over ellipses",
-    "question_usage": "rhetorical questions at section endings to create reflection pauses; never Socratic; typically 1-2 per piece; always followed by the brand's own answer",
-    "metaphor_usage": "draws metaphors from construction/architecture domain (foundations, scaffolding, blueprints); avoids sports metaphors; metaphors used to explain processes, not emotions",
-    "qualification_style": "uses 'in our experience' and 'what we've seen' rather than hedging with 'might' or 'could'; qualifies with data ('in 73% of cases') rather than adverbs ('usually')",
-    "mechanical_rules": {{
-      "sentence_rhythm": "alternates short declarative sentences (3-8 words) with longer explanatory ones (15-25 words); uses 1-2 fragment sentences per section for punch",
-      "paragraph_constraints": "max 4 sentences per paragraph; opening paragraph is always 2-3 sentences; single-sentence paragraphs used for emphasis after a complex point",
-      "heading_format": "numbered bold headings for main sections; no bullet points as primary structure; sub-sections use bold phrases not numbered",
-      "evidence_anchoring": "every major claim is anchored to a specific number, client count, timeframe, or measurable outcome; vague assertions are never left unanchored"
-    }}
-  }},
-  "intellectual_patterns": {{
-    "diagnostic_style": "frames failures as intention gaps not knowledge gaps: brands confuse X with Y, brands perform Z rather than live it",
-    "value_hierarchy": "consistency ranked above creativity; authenticity ranked above performance; long-term relationship ranked above short-term transaction",
-    "reframing_moves": "takes a commonly accepted term and splits it into what people think it means vs. what it actually means; uses 'X is not Y, it is Z' structure",
-    "authority_source": "grounds authority in volume of client experience with specific numbers, and in duration of practice with specific timeframes",
-    "argument_structure": "opens with relatable observation → names the hidden flaw in common behavior → states the brand's diagnostic → prescribes the value-hierarchy-aligned solution → closes with outcome",
-    "thinking_templates": [
-      "opens section with a pattern observation using present tense plural subject ('Most brands...')",
-      "pivots with a contrast using 'But here is the [uncomfortable truth/real problem]' + authority anchor",
-      "closes section with a rhetorical question that mirrors the opening problem"
-    ]
-  }},
-  "tone": {{
-    "register": "semi-formal",
-    "emotional_quality": ["confident", "direct", "empathetic"],
-    "reader_relationship": "authoritative",
-    "hedging_frequency": "low",
-    "assertiveness": 0.8,
-    "urgency_level": 0.4
-  }},
-  "structure": {{
-    "argumentation_style": "problem_solution",
-    "evidence_ratio": 0.7,
-    "transition_density": "medium",
-    "front_loads_conclusions": false,
-    "opening_pattern": "opens with a universally relatable brand behavior stated as present-tense observation, immediately followed by an uncomfortable truth pivot anchored to brand experience and client count, closed with a two-part reframe that splits what brands think they are doing from what they are actually doing",
-    "closing_pattern": "closes with brand methodology restatement in one sentence, followed by two parallel short sentences contrasting what the work does not do vs. what it does, ending with a soft CTA phrased as an inviting question",
-    "section_pattern": "each section opens with a numbered bold heading, followed by 2-3 observation paragraphs, then a single insight sentence in its own paragraph",
-    "narrative_arc": "hook → diagnosis → brand experience proof → actionable insight list → CTA"
-  }},
-  "persuasion": {{
-    "primary_appeal": "ethos",
-    "social_proof_usage": "heavy",
-    "social_proof_pattern": "anchors credibility claims to specific client volume numbers and measurable outcome percentages; never uses vague terms like 'many clients'",
-    "call_to_action_pattern": "single",
-    "cta_pattern": "single soft CTA as an inviting question at the very end; mirrors the problem named in the opening; uses first-person plural invitation verb"
-  }},
-  "asset_bank": {{
-    "social_proof_claims": [
-      "<copy each specific social proof claim VERBATIM from the document — exact wording, exact numbers. These are factual claims the brand makes about its own experience. e.g. \'we\'ve built brand-aligned content frameworks for 84 B2B SaaS companies and found 250% higher ROI\'. Include ONLY claims that state a specific number, client count, percentage, or measurable outcome tied to the brand\'s direct experience. Do NOT include generic industry statistics.>"
-    ],
-    "named_frameworks": [
-      "<copy each named methodology, audit, or framework the brand owns VERBATIM — e.g. \'Vantage Pricing Audit\', \'Content Audit\', \'Deck Audit\'. Include only brand-owned names, not generic terms.>"
-    ],
-    "stated_values": [
-      "<copy each stated value or belief VERBATIM as it appears — e.g. \'Consistency beats creativity\', \'Authenticity is non-negotiable\'. Short declarative statements only.>"
-    ]
-  }},
-  "signature_constructions": [
-    "uses a two-part contrast sentence where part 1 names what content does and part 2 names what it actually is",
-    "opens sections with a 'we + past tense + volume anchor' sentence to establish authority before making a claim",
-    "uses the construction 'The brands that [succeed/win/grow] are the ones that [value-hierarchy behavior]' to prescribe"
-  ],
-  "section_patterns": {{
-    "opening_move": "state a universally relatable brand behavior as present-tense observation, then pivot to uncomfortable truth anchored to brand authority",
-    "list_introduction_move": "introduces numbered insights with a 'Here is what we learned after + timeframe + context' phrase",
-    "closing_move": "restate methodology in one sentence, execute contrast pair, close with inviting question"
-  }},
-  "generation_instructions": "Open with a relatable observation about common brand behavior, then pivot to an uncomfortable truth anchored to brand experience with a specific number. Alternate short declarative sentences with longer explanatory ones. Anchor every claim to a number, timeframe, or outcome — never leave assertions unanchored. Use first-person plural throughout. Draw metaphors from construction/architecture, not sports. Close with methodology restatement, a contrast pair, and a soft inviting question. DO NOT open with rhetorical questions. DO NOT hedge with 'might' or 'could'. DO NOT use passive voice. DO NOT leave any paragraph longer than 4 sentences."
-}}
-```
-
-The above is an EXAMPLE for a hypothetical brand. Extract the actual patterns from the document below.
+Your output must be a JSON object that matches the schema below exactly. Every field must describe writing mechanics in abstract, reusable terms — never copy sentences or phrases from the document. For numeric fields (0.0–1.0), use the scale definitions below. For string fields, describe the pattern in one to two precise sentences.
 
 ## SCALE DEFINITIONS
 
@@ -207,7 +115,8 @@ Rules:
 - State patterns with confidence where the profile is clear and specific.
 - Note "Needs more samples" only where the profile is genuinely ambiguous or contradictory — not merely because you have a single document.
 - A single well-written document can reveal sentence rhythm, tone, structure, pronoun patterns, and intellectual moves with high confidence.
-- BRAND ASSET BANK is a required section — aggregate all social_proof_claims, named_frameworks, and stated_values from all profiles. Preserve exact wording. Mark confidence level by frequency across profiles.
+- BRAND ASSET BANK is a required section — aggregate all social_proof_claims, named_frameworks, and stated_values from all profiles. Preserve exact wording.
+- For social_proof_claims confidence: mark HIGH if the TYPE of claim (e.g. 'We've [action] for X clients and seen Y%') is a clear brand habit in this document. The specific numbers are always unique — confidence refers to whether this claim STYLE is an established brand pattern, not whether the exact number recurs.
 - OPENING PATTERN and CLOSING PATTERN are the most critical sections — describe the structural moves precisely so any writer can execute them on any topic.
 - GENERATION INSTRUCTIONS must be entirely pattern-based — no content references, no quoted phrases, only structural and tonal mechanics a writer can apply to any topic.
 - Extract the brand name from the profile and include it explicitly.
@@ -237,7 +146,13 @@ Rules:
 - GENERATION INSTRUCTIONS must be entirely pattern-based — no content references, no quoted phrases, only structural and tonal mechanics a writer can apply to any topic.
 - Do not invent patterns not present in the source profiles. State "Insufficient data" where needed.
 - Extract the brand name from the profiles and include it explicitly.
-- BRAND ASSET BANK is a required section — aggregate all social_proof_claims, named_frameworks, and stated_values from all profiles. Preserve exact wording. Mark confidence level by frequency across profiles.
+- BRAND ASSET BANK is a required section — aggregate all social_proof_claims, named_frameworks, and stated_values from all profiles. Preserve exact wording.
+
+CRITICAL — TWO-LEVEL CONFIDENCE MODEL for the BRAND ASSET BANK:
+  PATTERN confidence = how consistently this TYPE of claim is used across ALL profiles (e.g. if every profile contains a 'We've [action] for X clients and seen Y%' style claim, the PATTERN is HIGH confidence even if each claim's specific numbers are unique per document).
+  DATA confidence = whether this SPECIFIC claim's exact numbers appear in multiple profiles (they rarely will, since each document describes different client work).
+  For social_proof_claims: mark PATTERN confidence HIGH if this type of evidence appears in 3+ profiles. Mark it LOW only if this is an isolated, unusual claim type not mirrored in other documents.
+  Do NOT mark every claim LOW simply because its specific numbers are unique to one document. The numbers are always unique — what matters is whether the brand consistently makes this type of claim.
 
 
 Business: {business_id}
@@ -257,10 +172,10 @@ METRICS_SYNTHESIS_TEMPLATE = """Structure your output exactly as follows:
 [The brand name extracted from documents. If not found: Not extracted — inject manually.]
 
 # BRAND ASSET BANK
-[Aggregate all asset_bank entries from all profiles. Deduplicate. For social_proof_claims: list only claims that appear in 2+ profiles as HIGH CONFIDENCE, 1 profile as LOW CONFIDENCE. For named_frameworks and stated_values: list all unique entries with their frequency count.]
+[Aggregate the asset_bank entries from all profiles. Deduplicate. CRITICAL RULE: DO NOT list every single claim. For social_proof_claims: list a maximum of the TOP 15 most frequent or highest-impact claims. For named_frameworks and stated_values: list a maximum of the TOP 5 most important unique entries.]
 
 SOCIAL PROOF CLAIMS:
-- [VERBATIM claim — e.g. "we\'ve built brand-aligned content frameworks for 84 B2B SaaS companies and found 250% higher ROI"] (confidence: HIGH/LOW, appears in N/M profiles)
+- [VERBATIM claim] (pattern confidence: HIGH/LOW — HIGH means this STYLE of claim appears consistently across 3+ profiles; LOW means it is an isolated or unusual claim type)
 
 NAMED FRAMEWORKS & METHODOLOGIES:
 - [VERBATIM framework name] (appears in N/M profiles)
@@ -352,4 +267,7 @@ DON'T:
 - [Anti-pattern instruction — minimum 5, all structural/tonal, no content references]
 
 # CONFIDENCE ASSESSMENT
-[Which dimensions are well-established vs. need more data]"""
+Well-established dimensions (consistent across 3+ profiles, HIGH confidence): [list them]
+Dimensions needing more data (contradictions or only 1 profile): [list them with specific contradiction noted]
+
+NOTE: A structural pattern (e.g. opening format, closing CTA, evidence anchoring, pronoun usage) that is CONSISTENT across all observed profiles is HIGH confidence even if specific content within that pattern varies per document. Only flag a dimension as LOW confidence if profiles genuinely contradict each other on that dimension, or if only 1 profile provided data on it with no corroboration."""

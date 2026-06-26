@@ -184,8 +184,6 @@ TONE SIGNATURE:
 PERMITTED BRAND CLAIMS — CLOSED LIST (use ONLY these for brand experience claims — do NOT invent numbers):
 {asset_bank}
 
-BRAND STYLE EXAMPLES (reference for HOW the brand writes, not content to reproduce):
-{examples}
 
 ═══════════════════════════════════════════════════
 REVISION RULES

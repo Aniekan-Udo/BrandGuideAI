@@ -71,6 +71,7 @@ services:
       - "8000:8000"
     environment:
       GROQ_API_KEY: ${GROQ_API_KEY}
+      GOOGLE_API_KEY: ${GOOGLE_API_KEY}
       POSTGRES_URI: ${POSTGRES_URI}
       REDIS_URL: ${REDIS_URL}
       RABBIT_URL: ${RABBIT_URL}
@@ -99,6 +100,7 @@ services:
     environment:
       PYTHONPATH: /app
       GROQ_API_KEY: ${GROQ_API_KEY}
+      GOOGLE_API_KEY: ${GOOGLE_API_KEY}
       POSTGRES_URI: ${POSTGRES_URI}
       REDIS_URL: ${REDIS_URL}
       RABBIT_URL: ${RABBIT_URL}
@@ -123,6 +125,7 @@ services:
     command: celery -A celery_task worker --queues feedback --concurrency 8 --loglevel info
     environment:
       GROQ_API_KEY: ${GROQ_API_KEY}
+      GOOGLE_API_KEY: ${GOOGLE_API_KEY}
       POSTGRES_URI: ${POSTGRES_URI}
       REDIS_URL: ${REDIS_URL}
       RABBIT_URL: ${RABBIT_URL}
@@ -141,6 +144,7 @@ services:
     command: celery -A celery_task worker --queues retraining --concurrency 2 --loglevel info
     environment:
       GROQ_API_KEY: ${GROQ_API_KEY}
+      GOOGLE_API_KEY: ${GOOGLE_API_KEY}
       POSTGRES_URI: ${POSTGRES_URI}
       REDIS_URL: ${REDIS_URL}
       RABBIT_URL: ${RABBIT_URL}
@@ -160,6 +164,7 @@ services:
     environment:
       PYTHONPATH: /app
       GROQ_API_KEY: ${GROQ_API_KEY}
+      GOOGLE_API_KEY: ${GOOGLE_API_KEY}
       POSTGRES_URI: ${POSTGRES_URI}
       REDIS_URL: ${REDIS_URL}
       RABBIT_URL: ${RABBIT_URL}

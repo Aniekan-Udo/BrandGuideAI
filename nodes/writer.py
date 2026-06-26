@@ -148,23 +148,23 @@ def writer_node(state: GraphState, rag: BrandRAG, analyzer: BrandMetricsSQL,
     
     # Fallbacks for formulaic patterns
     if not opening_formula:
-        opening_formula = "Open with a relatable observation, pivot to brand authority, end with a contrast."
+        opening_formula = "No specific opening formula extracted. Write a natural, engaging opening appropriate for the topic."
     if not closing_formula:
-        closing_formula = "Close with brand methodology, parallel contrast, and soft CTA."
+        closing_formula = "No specific closing formula extracted. Write a natural closing appropriate for the topic."
     if not mechanical_rules:
         mechanical_rules = "Use standard paragraph structure."
     if not evidence_anchoring:
         evidence_anchoring = "Ground claims in specific numbers, timeframes, or client outcomes."
     if not diagnostic_style:
-        diagnostic_style = "Diagnose problems as intention failures, not surface symptoms."
+        diagnostic_style = "No specific diagnostic style extracted. Present problems clearly."
     if not reframing_moves:
-        reframing_moves = "Redefine concepts by negation and contrast."
+        reframing_moves = "No specific reframing moves extracted. Explain concepts straightforwardly."
     if not pronoun_pattern:
-        pronoun_pattern = "First-person plural (we/our) as dominant voice."
+        pronoun_pattern = "Use the appropriate pronoun perspective for the content type."
     if not qualification_style:
-        qualification_style = "Qualify with experience ('in our experience') rather than hedging ('might', 'could')."
+        qualification_style = "State claims clearly and confidently."
     if not tone_signature:
-        tone_signature = "Semi-formal, confident, authoritative but not aggressive."
+        tone_signature = "Professional and natural."
     if not structural_patterns:
         structural_patterns = "No structural patterns extracted yet — follow the opening/closing formulas and generation instructions above."
 
@@ -242,7 +242,6 @@ def writer_node(state: GraphState, rag: BrandRAG, analyzer: BrandMetricsSQL,
             pronoun_pattern=pronoun_pattern,
             qualification_style=qualification_style,
             tone_signature=tone_signature,
-            examples=examples,
             asset_bank=asset_bank
         )
     

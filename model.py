@@ -311,14 +311,36 @@ class LLMSingleton:
         "generation":  0.7,
     }
 
-    # Modes that use Gemini (frontier) instead of Groq
-    GEMINI_MODES = {"enforcement", "extraction", "synthesis"}
+    # Per-mode model selection.
+    # extraction uses llama-3.1-8b-instant (20k TPM free limit) because the
+    # metrics prompt is ~12k tokens and exceeds Versatile's 12k TPM cap.
+    # All other modes use llama-3.3-70b-versatile for reasoning quality.
+    MODE_MODELS = {
+        "extraction":  "llama-3.1-8b-instant",
+        "enforcement": "llama-3.3-70b-versatile",
+        "synthesis":   "llama-3.3-70b-versatile",
+        "generation":  "llama-3.3-70b-versatile",
+    }
+
+    # Modes that use Gemini (frontier) to bypass Groq free-tier TPM limits
+    GEMINI_MODES = {"extraction", "synthesis", "generation", "enforcement"}
+
+    # Per-mode output token limits — synthesis needs much more headroom
+    # to write the full Brand Brain without truncation.
+    # Extraction only produces structured JSON so 8192 is sufficient.
+    MODE_MAX_TOKENS = {
+        "extraction":  8192,
+        "enforcement": 8192,
+        "synthesis":   32768,
+        "generation":  8192,
+    }
 
     @classmethod
     def get(cls, mode: str = "generation"):
         if mode not in cls._instances:
             temperature = cls.MODE_TEMPERATURES.get(mode, 0.7)
-            
+            model_name  = cls.MODE_MODELS.get(mode, "llama-3.3-70b-versatile")
+
             # Ensure an event loop exists for async clients initialized in synchronous threads
             import asyncio
             try:
@@ -326,18 +348,23 @@ class LLMSingleton:
             except RuntimeError:
                 asyncio.set_event_loop(asyncio.new_event_loop())
 
-            if mode in cls.GEMINI_MODES and os.getenv("GOOGLE_API_KEY", "").strip():
-                print(f"🤖 [LLMSingleton] Routing mode '{mode}' to GEMINI 2.5 FLASH")
+            google_api_key = os.getenv("GOOGLE_API_KEY", "").strip()
+            
+            if mode in cls.GEMINI_MODES and google_api_key:
+                max_tokens = cls.MODE_MAX_TOKENS.get(mode, 8192)
+                print(f"🤖 [LLMSingleton] Routing mode '{mode}' to GEMINI 2.5 FLASH (max_tokens={max_tokens})")
                 cls._instances[mode] = ChatGemini(
                     model=os.getenv("GEMINI_MODEL", "gemini-2.5-flash"),
-                    api_key=os.getenv("GOOGLE_API_KEY", ""),
+                    api_key=google_api_key,
                     temperature=temperature,
+                    max_tokens=max_tokens,
                 ).to_langchain()
             else:
-                print(f"🤖 [LLMSingleton] Routing mode '{mode}' to GROQ")
+                print(f"🤖 [LLMSingleton] Routing mode '{mode}' to GROQ ({model_name})")
                 cls._instances[mode] = ChatGroq(
-                    model="openai/gpt-oss-120b",
+                    model=model_name,
                     api_key=os.getenv("GROQ_API_KEY", ""),
                     temperature=temperature,
                 ).to_langchain()
+
         return cls._instances[mode]

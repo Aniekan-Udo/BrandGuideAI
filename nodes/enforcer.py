@@ -128,19 +128,11 @@ def enforcer_node(state: GraphState, analyzer: BrandMetricsSQL, rag: BrandRAG = 
     # Build permitted claims whitelist from asset bank
     permitted_claims = _extract_permitted_claims(metrics)
 
-    # Retrieve brand voice examples for ground-truth comparison
-    examples = ""
-    if rag is not None:
-        try:
-            examples = rag.query(state.get("topic", "brand voice"))
-        except Exception as e:
-            logger.warning("RAG failed in enforcer, evaluating without examples: %s", e)
-
+    # The enforcer no longer uses raw RAG examples, relying strictly on synthesized rules.
     result = LLMSingleton.get("enforcement").invoke(
         ENFORCER_PROMPT.format(
             metrics=metrics,
             content=content,
-            examples=examples if examples else "No brand style examples available — evaluate against metrics only.",
             permitted_claims=permitted_claims
         )
     )

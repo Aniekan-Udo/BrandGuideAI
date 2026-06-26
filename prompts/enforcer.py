@@ -1,12 +1,10 @@
-ENFORCER_PROMPT = """You are a brand voice enforcer. Evaluate the content strictly against each dimension of the brand metrics AND the brand style examples.
+ENFORCER_PROMPT = """You are a brand voice enforcer. Evaluate the content strictly against each dimension of the brand metrics.
 
 Your job is to measure how closely the content replicates the brand's writing mechanics — NOT whether it is "good writing" by generic standards. You must be STRICT. Generic marketing copy that vaguely resembles the brand is NOT a match.
 
 BRAND METRICS:
 {metrics}
 
-BRAND STYLE EXAMPLES (actual brand writing — use as ground truth for voice comparison):
-{examples}
 
 PERMITTED SOCIAL PROOF CLAIMS (CLOSED LIST — the ONLY specific numbers, client counts, percentages, and named claims this brand is allowed to make):
 {permitted_claims}
@@ -55,7 +53,7 @@ STEP 2 — MANDATORY STRUCTURAL PRE-CHECK
 
 Only run this if the hallucination check PASSED.
 
-Before scoring, you MUST answer each of these binary checks by comparing the content against the brand metrics and examples. These answers directly constrain your scores.
+Before scoring, you MUST answer each of these binary checks by comparing the content against the brand metrics. These answers directly constrain your scores.
 
 1. OPENING PATTERN: Does the content open with the brand's specified opening pattern? Specifically:
    (a) Does it start with a present-tense uncomfortable truth (8-12 words)?
