@@ -13,13 +13,21 @@ logger = logging.getLogger(__name__)
 from utils.observe import observe
 
 
+# def _parse_llm_json(raw: str) -> dict:
+#     """Strip markdown fences and parse JSON from LLM output."""
+#     raw = raw.strip()
+#     if raw.startswith("```"):
+#         raw = raw.split("```")[1]
+#         if raw.startswith("json"):
+#             raw = raw[4:]
+#     return json.loads(raw.strip())
+
 def _parse_llm_json(raw: str) -> dict:
     """Strip markdown fences and parse JSON from LLM output."""
     raw = raw.strip()
-    if raw.startswith("```"):
-        raw = raw.split("```")[1]
-        if raw.startswith("json"):
-            raw = raw[4:]
+    match = re.search(r"```(?:json)?\s*(.*?)```", raw, re.DOTALL)
+    if match:
+        raw = match.group(1)
     return json.loads(raw.strip())
 
 

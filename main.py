@@ -42,17 +42,23 @@ app = FastAPI(
 
 from fastapi.middleware.cors import CORSMiddleware
 
+origins = [
+    "https://brandguard.com",
+    "http://localhost:8000",
+    "http://127.0.0.1:8000",
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+    "http://localhost:5173",
+    "http://127.0.0.1:5173"
+]
+
+frontend_url = os.getenv("FRONTEND_URL")
+if frontend_url:
+    origins.append(frontend_url)
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "https://brandguard.com",
-        "http://localhost:8000",
-        "http://127.0.0.1:8000",
-        "http://localhost:3000",
-        "http://127.0.0.1:3000",
-        "http://localhost:5173",
-        "http://127.0.0.1:5173"
-    ],
+    allow_origins=origins,
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "DELETE"],
     allow_headers=["Authorization", "Content-Type"],
@@ -68,16 +74,9 @@ app.include_router(users.router, prefix="/users", tags=["Users"])
 app.include_router(conversation.router, prefix="/conversation", tags=["Conversation"])
 app.include_router(document.router, prefix="/documents", tags=["Documents"])
 
-# Serve frontend static assets and routes
-app.mount("/static", StaticFiles(directory="static"), name="static")
-
 @app.get("/")
-async def serve_landing():
-    return FileResponse("static/landing.html")
-
-@app.get("/console")
-async def serve_index():
-    return FileResponse("static/index.html")
+async def root():
+    return {"message": "BrandMuse AI API is running. The frontend is served independently via Vite."}
 
 @app.get("/health", tags=["Health"])
 async def health_check():

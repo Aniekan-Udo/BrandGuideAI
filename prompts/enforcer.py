@@ -117,7 +117,9 @@ Only run this if the hallucination check PASSED.
 STEP 4 — OUTPUT
 ═══════════════════════════════════════════════════
 
-Return JSON only. No preamble, markdown, or explanation:
+Return JSON only. No preamble, markdown, or explanation.
+
+CRITICAL — VALID JSON ONLY: When quoting a passage from the content inside any JSON string field (flagged_passages, hallucinated_claims, dimension_details), do NOT include literal double-quote characters inside that quoted text. If the passage itself contains a quotation mark, paraphrase around it or omit it. A single unescaped double-quote will break JSON parsing and cause the entire evaluation to be discarded.
 
 {{
     "hallucination_check": {{
