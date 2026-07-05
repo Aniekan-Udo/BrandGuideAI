@@ -8,7 +8,7 @@ import MemoryPanel from './components/MemoryPanel';
 
 function App() {
   // Simple auth check for now. In a real app, use Context or Redux.
-  const isAuthenticated = !!localStorage.getItem('token');
+  const isAuthenticated = !!localStorage.getItem('bg_access_token');
 
   return (
     <BrowserRouter>

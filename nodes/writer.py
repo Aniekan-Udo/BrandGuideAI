@@ -67,6 +67,9 @@ def _extract_asset_bank(metrics: str) -> str:
     closed list of permitted claims for injection into the writer prompt.
     This prevents the writer from hallucinating client counts, percentages,
     and named frameworks by giving it only the facts it is allowed to use.
+    Now also extracts FINANCIAL TARGETS & PROJECTIONS so proposal-type content
+    can use specific numbers, dollar amounts, and timeframes without triggering
+    the hallucination gate.
     """
     match = re.search(
         r"#\s*BRAND ASSET BANK\s*\n(.*?)(?=\n#\s+[A-Z]|\Z)",
@@ -80,11 +83,24 @@ def _extract_asset_bank(metrics: str) -> str:
             "Use only general brand observations without specific data points."
         )
     asset_text = match.group(1).strip()
-    return (
-        "PERMITTED SOCIAL PROOF CLAIMS — use ONLY these exact numbers and facts when writing brand experience claims.\n"
-        "Do NOT invent any number, percentage, client count, or framework name not listed here.\n\n"
-        + asset_text
+
+    # Check whether a FINANCIAL TARGETS section exists in the asset bank
+    has_financial = bool(re.search(
+        r"FINANCIAL TARGETS", asset_text, re.IGNORECASE
+    ))
+
+    header = (
+        "PERMITTED BRAND CLAIMS — use ONLY these exact numbers and facts when writing brand experience claims.\n"
+        "Do NOT invent any number, percentage, client count, timeframe, or framework name not listed here.\n"
     )
+    if has_financial:
+        header += (
+            "FINANCIAL TARGETS & PROJECTIONS listed below are explicitly permitted — "
+            "use them verbatim when writing program objectives, financial summaries, or roadmap timeframes.\n"
+        )
+
+    return header + "\n" + asset_text
+
 
 
 @observe("writer_node")

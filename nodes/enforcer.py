@@ -60,10 +60,11 @@ def _extract_permitted_claims(metrics: str) -> str:
     lines = [l.strip().lstrip("-•*").strip() for l in asset_text.splitlines() if l.strip()]
 
     # Separate into categories for clarity
-    social_proof = []
-    frameworks   = []
-    values       = []
-    other        = []
+    social_proof     = []
+    frameworks       = []
+    values           = []
+    financial_targets = []
+    other            = []
 
     current_category = None
     for line in lines:
@@ -76,6 +77,9 @@ def _extract_permitted_claims(metrics: str) -> str:
             continue
         elif "VALUE" in upper or "BELIEF" in upper:
             current_category = "values"
+            continue
+        elif "FINANCIAL TARGET" in upper or "PROJECTION" in upper:
+            current_category = "financial_targets"
             continue
         elif line.startswith("#") or (line.isupper() and len(line) > 5):
             current_category = "other"
@@ -90,6 +94,8 @@ def _extract_permitted_claims(metrics: str) -> str:
             frameworks.append(line)
         elif current_category == "values":
             values.append(line)
+        elif current_category == "financial_targets":
+            financial_targets.append(line)
         else:
             other.append(line)
 
@@ -98,6 +104,13 @@ def _extract_permitted_claims(metrics: str) -> str:
     if social_proof:
         numbered = "\n".join(f"  {i+1}. {c}" for i, c in enumerate(social_proof))
         sections.append(f"PERMITTED SOCIAL PROOF CLAIMS (exact numbers the brand may claim):\n{numbered}")
+
+    if financial_targets:
+        numbered = "\n".join(f"  {i+1}. {c}" for i, c in enumerate(financial_targets))
+        sections.append(
+            f"PERMITTED FINANCIAL TARGETS & PROJECTIONS (specific numbers, percentages, dollar amounts, "
+            f"timeframes, and quantified outcomes the brand may use):\n{numbered}"
+        )
 
     if frameworks:
         numbered = "\n".join(f"  {i+1}. {c}" for i, c in enumerate(frameworks))
@@ -121,7 +134,8 @@ def _extract_permitted_claims(metrics: str) -> str:
     header = (
         "The following is the COMPLETE list of specific claims this brand is permitted to make.\n"
         "Any specific number, percentage, client count, or named framework NOT on this list "
-        "is a hallucination and must be flagged.\n\n"
+        "is a hallucination and must be flagged. EXCEPTION: numbers that appear verbatim in "
+        "the PERMITTED FINANCIAL TARGETS & PROJECTIONS list are always allowed.\n\n"
     )
     return header + "\n\n".join(sections)
 

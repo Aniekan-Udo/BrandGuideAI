@@ -12,7 +12,7 @@ const GeneratorPanel = () => {
   const [isGenerating, setIsGenerating] = useState(false);
   
   const [status, setStatus] = useState('Idle');
-  const [logs, setLogs] = useState<{ time: str, msg: str, type: str }[]>([]);
+  const [logs, setLogs] = useState<{ time: string, msg: string, type: string }[]>([]);
   const [generationId, setGenerationId] = useState('');
   const [generatedText, setGeneratedText] = useState('');
   
@@ -31,7 +31,7 @@ const GeneratorPanel = () => {
     }
   }, [logs, generatedText]);
 
-  const addLog = (msg: str, type = '') => {
+  const addLog = (msg: string, type = '') => {
     const time = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
     setLogs(prev => [...prev, { time, msg, type }]);
   };
@@ -48,7 +48,7 @@ const GeneratorPanel = () => {
 
     try {
       const token = localStorage.getItem('bg_access_token');
-      const response = await fetch('http://localhost:8000/conversation/generate/stream', {
+      const response = await fetch(`${import.meta.env.VITE_API_URL || 'http://localhost:8000'}/conversation/generate/stream`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

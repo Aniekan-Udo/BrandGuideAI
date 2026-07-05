@@ -80,13 +80,16 @@ Return ONLY a JSON object with no preamble or markdown. Use this schema:
   }},
   "asset_bank": {{
     "social_proof_claims": [
-      "<copy each specific social proof claim VERBATIM from the document — exact wording, exact numbers. These are factual claims the brand makes about its own experience. e.g. \'we\'ve built brand-aligned content frameworks for 84 B2B SaaS companies and found 250% higher ROI\'. Include ONLY claims that state a specific number, client count, percentage, or measurable outcome tied to the brand\'s direct experience. Do NOT include generic industry statistics.>"
+      "<copy each specific social proof claim VERBATIM from the document — exact wording, exact numbers. These are factual claims the brand makes about its own experience. e.g. 'we've built brand-aligned content frameworks for 84 B2B SaaS companies and found 250% higher ROI'. Include ONLY claims that state a specific number, client count, percentage, or measurable outcome tied to the brand's direct experience. Do NOT include generic industry statistics.>"
     ],
     "named_frameworks": [
-      "<copy each named methodology, audit, or framework the brand owns VERBATIM — e.g. \'Vantage Pricing Audit\', \'Content Audit\', \'Deck Audit\'. Include only brand-owned names, not generic terms.>"
+      "<copy each named methodology, audit, or framework the brand owns VERBATIM — e.g. 'Vantage Pricing Audit', 'Content Audit', 'Deck Audit'. Include only brand-owned names, not generic terms.>"
     ],
     "stated_values": [
-      "<copy each stated value or belief VERBATIM as it appears — e.g. \'Consistency beats creativity\', \'Authenticity is non-negotiable\'. Short declarative statements only.>"
+      "<copy each stated value or belief VERBATIM as it appears — e.g. 'Consistency beats creativity', 'Authenticity is non-negotiable'. Short declarative statements only.>"
+    ],
+    "financial_targets": [
+      "<copy each specific financial target, projection, investment figure, or quantified operational outcome VERBATIM from the document — exact wording, exact numbers, exact timeframes. These are the brand's own stated numeric targets and projections. e.g. 'targets $55M in annualized run-rate savings by Year 3', 'a 35% reduction in unplanned downtime', '$16M investment for Phase 1 and Phase 2', '450,000 tonnes of CO2 captured annually'. Include dollar amounts, percentages, MW capacities, tonnes, timeframes (Year 1, Months 1-6, etc.), and any other quantified target or projection tied to a specific program or initiative. Do NOT include generic industry statistics.>"
     ]
   }},
   "signature_constructions": [
@@ -172,7 +175,7 @@ METRICS_SYNTHESIS_TEMPLATE = """Structure your output exactly as follows:
 [The brand name extracted from documents. If not found: Not extracted — inject manually.]
 
 # BRAND ASSET BANK
-[Aggregate the asset_bank entries from all profiles. Deduplicate. CRITICAL RULE: DO NOT list every single claim. For social_proof_claims: list a maximum of the TOP 15 most frequent or highest-impact claims. For named_frameworks and stated_values: list a maximum of the TOP 5 most important unique entries.]
+[Aggregate the asset_bank entries from all profiles. Deduplicate. CRITICAL RULE: DO NOT list every single claim. For social_proof_claims: list a maximum of the TOP 15 most frequent or highest-impact claims. For named_frameworks and stated_values: list a maximum of the TOP 5 most important unique entries. For financial_targets: list ALL unique targets — do not cap these, as every distinct figure is a permitted number the writer may use.]
 
 SOCIAL PROOF CLAIMS:
 - [VERBATIM claim] (pattern confidence: HIGH/LOW — HIGH means this STYLE of claim appears consistently across 3+ profiles; LOW means it is an isolated or unusual claim type)
@@ -182,6 +185,9 @@ NAMED FRAMEWORKS & METHODOLOGIES:
 
 STATED VALUES & BELIEFS:
 - [VERBATIM value statement] (appears in N/M profiles)
+
+FINANCIAL TARGETS & PROJECTIONS:
+- [VERBATIM financial target, projection, or quantified outcome — exact numbers, percentages, dollar amounts, timeframes] (appears in N/M profiles)
 
 # BRAND VOICE OVERVIEW
 [2-3 sentences describing the brand's core writing identity in terms of HOW it writes — register, authority style, reader relationship, and intellectual stance. No content references.]
