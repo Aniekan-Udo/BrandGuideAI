@@ -82,3 +82,44 @@ async def upload(
 
     # Return required generation_id along with task_id and status to satisfy TaskResponse schema
     return {"generation_id": "", "task_id": result.id, "status": "queued"}
+
+
+@router.delete("/documents/{document_id}")
+async def delete_document(
+    document_id: str,
+    request: Request,
+    db: Annotated[Session, Depends(get_db)]
+):
+    from database import BrandDocument
+    from celery_task import refresh_rag, extract_metrics
+    import hashlib
+
+    doc = db.query(BrandDocument).filter(BrandDocument.id == document_id).first()
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+        
+    business_id = doc.business_id
+    content_type = doc.content_type
+    doc_content = doc.file_content
+
+    # 1. Delete from DB
+    db.delete(doc)
+    db.commit()
+
+    # 2. Clear Redis Idempotency Key
+    if doc_content:
+        content_hash = hashlib.md5(doc_content.encode()).hexdigest()
+        idempotency_key = f"upload:{business_id}:{content_type}:{content_hash}"
+        request.app.state.redis.delete(idempotency_key)
+
+    # 3. Trigger Background Tasks to rebuild the Brand Brain and Vector Index
+    # We pass None for new_doc_content to force a full rebuild of the RAG index
+    # We trigger extract_metrics without a doc_id so it re-synthesizes from the remaining DB docs
+    from celery import group
+    task_group = group(
+        refresh_rag.s(business_id=business_id, content_type=content_type, new_doc_content=None),
+        extract_metrics.s(business_id=business_id, content_type=content_type, doc_id=None, doc_content=None)
+    )
+    task_group.delay()
+
+    return {"message": "Document deleted and system rebuilding successfully"}

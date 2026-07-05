@@ -60,7 +60,7 @@ async def generate_stream(request: Request, body: GenerateRequest):
                 logger.warning("Stream timed out generation_id=%s", generation_id)
                 break
 
-            chunk = await async_redis.blpop(f"stream:{generation_id}", timeout=10)  
+            chunk = await async_redis.blpop(f"stream:{generation_id}", timeout=10)  # type: ignore[misc]
 
             if chunk is None:
                 with get_db_session() as session:
@@ -76,24 +76,24 @@ async def generate_stream(request: Request, body: GenerateRequest):
 
 @router.post("/feedback", response_model=TaskResponse)
 @limiter.limit("30/minute")
-async def submit_feedback(request: FeedbackRequest, req: Request):
+async def submit_feedback(request: Request, feedback: FeedbackRequest):
     from celery_task import process_feedback
 
     task = process_feedback.delay(
-        generation_id=request.generation_id,
-        business_id=request.business_id,
-        content_type=request.content_type,
-        human_approved=request.human_approved,
-        human_score=request.human_score,
-        human_feedback=request.human_feedback
+        generation_id=feedback.generation_id,
+        business_id=feedback.business_id,
+        content_type=feedback.content_type,
+        human_approved=feedback.human_approved,
+        human_score=feedback.human_score,
+        human_feedback=feedback.human_feedback
     )
 
     logger.info(
         "Feedback queued task_id=%s generation_id=%s approved=%s",
-        task.id, request.generation_id, request.human_approved
+        task.id, feedback.generation_id, feedback.human_approved
     )
 
-    return {"generation_id": request.generation_id, "task_id": task.id, "status": "queued"}
+    return {"generation_id": feedback.generation_id, "task_id": task.id, "status": "queued"}
 
 
 @router.get("/health")
