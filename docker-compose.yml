@@ -55,6 +55,7 @@ services:
             python -c \"from fastembed import TextEmbedding; TextEmbedding('BAAI/bge-small-en-v1.5')\""
     environment:
       SECRET_KEY: ${SECRET_KEY}
+      FRONTEND_URL: https://brandmuse-ai-eta.vercel.app
       FASTEMBED_CACHE_PATH: /tmp/fastembed_cache
     volumes:
       - fastembed_cache:/tmp/fastembed_cache
@@ -77,6 +78,7 @@ services:
       RABBIT_URL: ${RABBIT_URL}
       TAVILY_API_KEY: ${TAVILY_API_KEY}
       SECRET_KEY: ${SECRET_KEY}
+      FRONTEND_URL: https://brandmuse-ai-eta.vercel.app
       FASTEMBED_CACHE_PATH: /tmp/fastembed_cache
     volumes:
       - fastembed_cache:/tmp/fastembed_cache
@@ -106,6 +108,7 @@ services:
       RABBIT_URL: ${RABBIT_URL}
       TAVILY_API_KEY: ${TAVILY_API_KEY}
       SECRET_KEY: ${SECRET_KEY}
+      FRONTEND_URL: https://brandmuse-ai-eta.vercel.app
       FASTEMBED_CACHE_PATH: /tmp/fastembed_cache
     volumes:
       - fastembed_cache:/tmp/fastembed_cache
@@ -170,6 +173,7 @@ services:
       RABBIT_URL: ${RABBIT_URL}
       TAVILY_API_KEY: ${TAVILY_API_KEY}
       SECRET_KEY: ${SECRET_KEY}
+      FRONTEND_URL: https://brandmuse-ai-eta.vercel.app
       FASTEMBED_CACHE_PATH: /tmp/fastembed_cache
     volumes:
       - fastembed_cache:/tmp/fastembed_cache
