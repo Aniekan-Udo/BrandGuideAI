@@ -101,6 +101,32 @@ class BrandRAG:
         )
         return "\n\n".join(r.text for r in merged)
 
+    def query_structure(self, section_type: str, topic: str) -> str:
+        """Retrieve brand voice examples specifically for a structural section (e.g. 'opening', 'risk')."""
+        if not topic.strip() or not section_type.strip():
+            raise ValueError("Query topic and section_type must not be empty.")
+
+        index = self._get_index().index
+
+        # Primary: targeted structural retrieval
+        structural_query = f"{section_type} section paragraph regarding {topic}"
+        structural_retriever = index.as_retriever(similarity_top_k=self.similarity_top_k)
+        structural_results = self._retrieve_with_retry(structural_retriever, structural_query)
+
+        if not structural_results:
+            logger.warning(
+                "No structural results for business_id=%s content_type=%s section=%r topic=%r",
+                self.business_id, self.content_type, section_type, topic,
+            )
+            return ""
+
+        logger.info(
+            "Retrieved %d structural node(s) for business_id=%s content_type=%s section=%r topic=%r",
+            len(structural_results), self.business_id, self.content_type, section_type, topic,
+        )
+        return "\n\n".join(r.text for r in structural_results)
+
+
     def refresh(self, new_doc_content: str = None) -> None:
         """
         Incremental refresh: only embeds and inserts the new document.

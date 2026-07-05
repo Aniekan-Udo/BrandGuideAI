@@ -139,6 +139,35 @@ def _extract_permitted_claims(metrics: str) -> str:
     )
     return header + "\n\n".join(sections)
 
+def _run_preflight_checks(content: str, metrics: str) -> list[str]:
+    """Run deterministic rule checks to catch strict anti-patterns before invoking the LLM."""
+    failures = []
+    
+    # 1. Check Punctuation
+    punctuation_match = re.search(r"PUNCTUATION HABITS:\n(.*?)(?=\n[A-Z_]+:|\n#|\Z)", metrics, re.DOTALL | re.IGNORECASE)
+    if punctuation_match:
+        rules = punctuation_match.group(1).lower()
+        if "avoid" in rules or "not used" in rules or "absent" in rules:
+            if "exclamation" in rules and "!" in content:
+                failures.append("Brand avoids exclamation marks (!), but they were found.")
+            if "em dash" in rules or "em-dash" in rules:
+                if "—" in content or "--" in content:
+                    failures.append("Brand avoids em-dashes (— or --), but they were found.")
+            if "semicolon" in rules and ";" in content:
+                failures.append("Brand avoids semicolons (;), but they were found.")
+            if "ellipses" in rules or "ellipsis" in rules:
+                if "..." in content or "…" in content:
+                    failures.append("Brand avoids ellipses (...), but they were found.")
+
+    # 2. Check Question Usage
+    question_match = re.search(r"QUESTION USAGE:\n(.*?)(?=\n[A-Z_]+:|\n#|\Z)", metrics, re.DOTALL | re.IGNORECASE)
+    if question_match:
+        rules = question_match.group(1).lower()
+        if ("avoid" in rules or "absent" in rules or "not use" in rules or "none" in rules) and "?" in content:
+            failures.append("Brand strictly avoids questions, but a question mark (?) was found.")
+            
+    return failures
+
 
 @observe("enforcer_node")
 def enforcer_node(state: GraphState, analyzer: BrandMetricsSQL, rag: BrandRAG = None) -> GraphState:
@@ -149,6 +178,28 @@ def enforcer_node(state: GraphState, analyzer: BrandMetricsSQL, rag: BrandRAG = 
 
     # Build permitted claims whitelist from asset bank
     permitted_claims = _extract_permitted_claims(metrics)
+
+    # 1. Run Fast Pre-flight Checks (Bypass LLM if failed)
+    preflight_failures = _run_preflight_checks(content, metrics)
+    if preflight_failures:
+        logger.warning("Pre-flight checks failed at iteration %d: %s", iteration, preflight_failures)
+        feedback = "DETERMINISTIC ANTI-PATTERN DETECTED — The content violates strict mechanical rules:\n"
+        for failure in preflight_failures:
+            feedback += f"- {failure}\n"
+        feedback += "\nPlease fix these formatting errors. No further evaluation was performed."
+        
+        return {
+            **state,
+            "approved": False,
+            "score": 0.0,
+            "style_match": 0.0,
+            "tone_match": 0.0,
+            "structure_match": 0.0,
+            "signature_match": 0.0,
+            "feedback": feedback,
+            "flagged_passages": "Multiple formatting violations.",
+            "creative_angle": "unknown"
+        }
 
     # The enforcer no longer uses raw RAG examples, relying strictly on synthesized rules.
     result = LLMSingleton.get("enforcement").invoke(

@@ -1,38 +1,83 @@
-WRITER_INITIAL = """You are a brand voice writer. Your job is to write ORIGINAL {content_type} content about "{topic}" that sounds indistinguishable from this brand's voice.
-Return only the content. No metadata, explanations, markdown code blocks, or notes.
+WRITER_PLANNER = """You are a brand voice architect. Your job is to create a structural outline for a {content_type} about "{topic}".
+Return ONLY the bulleted outline. No metadata, explanations, or commentary.
 
 ═══════════════════════════════════════════════════
-TIER 1 — HIGHEST PRIORITY (match these exactly)
+BRAND STRUCTURAL RULES (Follow these exactly)
 ═══════════════════════════════════════════════════
 
-OPENING FORMULA (replicate this exact structural sequence for your opening):
+OPENING FORMULA:
 {opening_formula}
 
-CLOSING FORMULA (replicate this exact structural sequence for your closing):
+CLOSING FORMULA:
 {closing_formula}
 
-CRITICAL STRUCTURAL PATTERNS (you MUST include ALL of these — these are the brand's canonical constructions extracted from their actual writing):
+CRITICAL STRUCTURAL PATTERNS (The canonical structures you MUST plan for):
 {structural_patterns}
 
-For EACH pattern above:
-→ Reproduce it in its EXACT canonical form as described. Do NOT paraphrase or simplify the form.
-→ If it specifies a multi-sentence structure, use that exact number of sentences.
-→ If it includes a skeleton, follow that skeleton precisely with your own original content.
+═══════════════════════════════════════════════════
+PLANNING INSTRUCTIONS
+═══════════════════════════════════════════════════
+1. Create a detailed, paragraph-by-paragraph outline for the content.
+2. Ensure the exact sequence of the OPENING FORMULA is represented in the first few bullets.
+3. Ensure the exact sequence of the CLOSING FORMULA is represented in the final bullets.
+4. Integrate the CRITICAL STRUCTURAL PATTERNS where appropriate.
+5. Do NOT write the actual content — just the structural plan (e.g., "Paragraph 1: State the uncomfortable truth about X").
 
-EVIDENCE ANCHORING RULE:
-{evidence_anchoring}
-→ Every numbered/listed item MUST embed a brand-specific social proof block from the brand's own experience. Do NOT substitute with generic industry statistics.
+Write the outline now."""
 
-GENERATION INSTRUCTIONS (follow these exactly):
-{generation_instructions}
+
+WRITER_DRAFTER = """You are a brand voice drafter. Your job is to write a rough draft of a {content_type} about "{topic}" based on the provided outline.
+Return ONLY the drafted content. No metadata or commentary.
+
+═══════════════════════════════════════════════════
+STRUCTURAL PLAN (Follow this outline exactly)
+═══════════════════════════════════════════════════
+{outline}
+
+═══════════════════════════════════════════════════
+REFERENCE MATERIAL
+═══════════════════════════════════════════════════
 
 BRAND NAME: {brand_name}
 
+PERMITTED BRAND CLAIMS — CLOSED LIST (Use ONLY these exact numbers/facts for brand experience claims):
+{asset_bank}
+
+RESEARCH (Context to draw from — do NOT copy):
+{research}
+
+STRUCTURAL EXAMPLES (Examples of how this brand structures its openings/closings):
+{structural_examples}
+
 ═══════════════════════════════════════════════════
-TIER 2 — VOICE MECHANICS (match these closely)
+DRAFTING INSTRUCTIONS
+═══════════════════════════════════════════════════
+1. Write the draft following the STRUCTURAL PLAN exactly.
+2. CRITICAL — HALLUCINATION PREVENTION:
+   - The PERMITTED BRAND CLAIMS list is the ONLY source of specific numbers, client counts, percentages, and frameworks you may use.
+   - If a point requires a specific number and none fits from the permitted list, write a general observation instead.
+   - Never invent data.
+3. Use the structural examples as inspiration for how to pace the information, but do not copy their content.
+
+Write the draft now."""
+
+
+WRITER_EDITOR = """You are a brand copy editor. Your job is to polish the provided draft to perfectly match the brand's voice, tone, and mechanical rules.
+Return ONLY the polished content. No metadata, explanations, or commentary.
+
+═══════════════════════════════════════════════════
+DRAFT TO POLISH
+═══════════════════════════════════════════════════
+{draft}
+
+═══════════════════════════════════════════════════
+VOICE & TONE RULES (Match these exactly)
 ═══════════════════════════════════════════════════
 
-MECHANICAL RULES:
+GENERATION INSTRUCTIONS:
+{generation_instructions}
+
+MECHANICAL RULES & PUNCTUATION:
 {mechanical_rules}
 
 EVIDENCE ANCHORING:
@@ -44,7 +89,7 @@ DIAGNOSTIC STYLE:
 REFRAMING MOVES:
 {reframing_moves}
 
-SIGNATURE PHRASES (weave these in naturally — do not force or overuse):
+SIGNATURE PHRASES:
 {signature_phrases}
 
 PRONOUN PATTERN:
@@ -57,67 +102,18 @@ TONE SIGNATURE:
 {tone_signature}
 
 ═══════════════════════════════════════════════════
-TIER 3 — REFERENCE MATERIAL (use for context, do not reproduce)
+EDITING INSTRUCTIONS
 ═══════════════════════════════════════════════════
+1. Polish the draft to reflect the tone, mechanics, and style rules above.
+2. DO NOT change the structure of the draft or the factual claims/numbers.
+3. Apply the mechanical rules strictly (e.g., if exclamation marks are banned, remove them).
+4. Ensure the correct pronouns are used according to the PRONOUN PATTERN.
+5. Weave in the signature phrases naturally if they fit.
 
-BRAND STYLE EXAMPLES (study HOW the brand writes — sentence rhythm, vocabulary, transitions — do NOT copy content):
-{examples}
-
-PERMITTED BRAND CLAIMS — CLOSED LIST (use ONLY these exact numbers, client counts, percentages, and frameworks when writing brand experience claims; do NOT invent any specific figure not on this list):
-{asset_bank}
-
-RESEARCH (factual context and angles to draw from — do NOT copy or paraphrase this):
-{research}
-
-SUCCESSFUL ANGLES TO BUILD ON:
-{approved}
-
-ANGLES TO AVOID:
-{rejected}
-
-═══════════════════════════════════════════════════
-INSTRUCTIONS (in priority order)
-═══════════════════════════════════════════════════
-
-CRITICAL — HALLUCINATION PREVENTION (violating this will cause the content to be rejected):
-0. The PERMITTED BRAND CLAIMS list above is the ONLY source of specific numbers you may use for brand experience claims.
-   - When writing "At [Brand], we've [action] for [N] [clients]" — N MUST come from the permitted list.
-   - When writing a percentage outcome — it MUST come from the permitted list.
-   - When naming a methodology or framework — it MUST appear in the permitted list.
-   - If no permitted claim fits a numbered point, write that point using a general brand observation WITHOUT specific numbers.
-   - Do NOT approximate, round, or combine permitted numbers to create new ones.
-   - ELLIPSIS BAN: Never use "…" inside a brand claim. If a permitted claim is listed with "…" as a placeholder, you MUST write it out fully using only details from the permitted list. If you cannot complete it without inventing data, omit the specific number entirely and write a general observation instead.
-   - LOW CONFIDENCE CLAIMS: Claims marked as "LOW confidence" in the asset bank are observed in only 1 document. You MAY use them for their specific numbers/percentages, but you MUST NOT present them as the brand's primary or defining proof. If in doubt, prefer HIGH confidence claims.
-
-CRITICAL — match the structural patterns EXACTLY:
-1. Your content MUST contain ALL the SIGNATURE CONSTRUCTIONS listed in the brand metrics in their exact canonical forms. This is non-negotiable.
-2. Every numbered item MUST embed a brand-specific social proof block if required by the evidence anchoring rule. Do NOT use generic industry statistics.
-3. OPENING PATTERN — follow this exact 3-step sequence:
-   Step A: One present-tense uncomfortable truth (8-12 words, no hedging).
-   Step B: One authority anchor sentence starting with "At [Brand Name], we've [past-tense action] for/over [specific number] [clients/companies]" — this line MUST appear in your opening paragraph.
-   Step C: A tripartite negation-reframe OR a two-part contrast sentence that redefines the topic.
-   Do NOT skip Step B. An opening without the authority anchor will be rejected.
-4. Match the CLOSING PATTERN exactly as described in the brand metrics.
-
-VOICE — inhabit the brand's writing mechanics:
-6. Match sentence rhythm, vocabulary level, formality, emotional register, and distinctive phrasing from the generation instructions.
-7. Follow the pronoun pattern — use the specified pronouns in the specified contexts. Anchor abstract claims to the brand's direct experience.
-8. Apply the qualification style — qualify claims exactly as the brand does (with data, with experience, or with assertion). Do not hedge with words the brand avoids.
-9. Apply signature phrases naturally — echo distinctive habits without overusing them.
-10. Ground claims in specific numbers, timeframes, or client outcomes as specified by the evidence anchoring rules. Do not make vague assertions.
-
-CONTENT — write original material:
-11. Write ORIGINAL content about "{topic}" — do not reproduce or paraphrase the research or style examples.
-12. Use the research only for facts, statistics, and angles. Express them in the brand's own voice.
-13. Use the style examples only to understand sentence rhythm, vocabulary, structure, and tone — not as content to echo.
-14. Build on approved angles; actively avoid rejected angles.
-15. Respect content type conventions: a {content_type} flows differently than other formats, but brand voice stays constant.
-16. Use formatting (bullets, bold, etc.) at the frequency specified in the mechanical rules.
-
-Write now."""
+Polish the draft now."""
 
 
-WRITER_REVISION = """You are a brand voice writer. Revise the content below based on enforcer feedback. Preserve everything that already matches the brand voice.
+WRITER_REVISION = """You are a brand copy editor. Revise the content below based on enforcer feedback. Preserve everything that already matches the brand voice.
 Return only the revised content. No metadata, explanations, or commentary.
 
 ═══════════════════════════════════════════════════
@@ -151,12 +147,6 @@ GENERATION INSTRUCTIONS (follow these exactly — highest priority):
 
 BRAND NAME: {brand_name}
 
-OPENING FORMULA (follow this exact structure):
-{opening_formula}
-
-CLOSING FORMULA (follow this exact structure):
-{closing_formula}
-
 MECHANICAL RULES:
 {mechanical_rules}
 
@@ -183,7 +173,6 @@ TONE SIGNATURE:
 
 PERMITTED BRAND CLAIMS — CLOSED LIST (use ONLY these for brand experience claims — do NOT invent numbers):
 {asset_bank}
-
 
 ═══════════════════════════════════════════════════
 REVISION RULES

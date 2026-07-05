@@ -4,7 +4,7 @@ from model import LLMSingleton
 from brand_rag import BrandRAG
 from learning_memory import FeedbackPortSQL
 from brand_metrics import BrandMetricsSQL
-from prompts.writer import WRITER_INITIAL, WRITER_REVISION
+from prompts.writer import WRITER_PLANNER, WRITER_DRAFTER, WRITER_EDITOR, WRITER_REVISION
 from graph.state import GraphState
 
 logger = logging.getLogger(__name__)
@@ -184,14 +184,14 @@ def writer_node(state: GraphState, rag: BrandRAG, analyzer: BrandMetricsSQL,
     if not structural_patterns:
         structural_patterns = "No structural patterns extracted yet — follow the opening/closing formulas and generation instructions above."
 
-    # RAG examples — injected as full voice reference only (no naive opening/closing extraction)
+    # Structural RAG — fetch examples of structural elements
     try:
-        examples = rag.query(topic)
-        if not examples:
-            examples = GENERIC_EXAMPLES
+        structural_examples = rag.query_structure("opening or closing", topic)
+        if not structural_examples:
+            structural_examples = GENERIC_EXAMPLES
     except Exception as e:
-        logger.warning("RAG failed, using generic examples: %s", e)
-        examples = GENERIC_EXAMPLES
+        logger.warning("Structural RAG failed, using generic examples: %s", e)
+        structural_examples = GENERIC_EXAMPLES
 
     # Learning memory — approved/rejected patterns with feedback reasoning
     try:
@@ -215,29 +215,63 @@ def writer_node(state: GraphState, rag: BrandRAG, analyzer: BrandMetricsSQL,
     ) if rejected_entries else "None yet"
 
     if iteration == 1:
-        prompt = WRITER_INITIAL.format(
+        # STEP 1: PLANNER
+        prompt_planner = WRITER_PLANNER.format(
             topic=topic,
             content_type=content_type,
-            research=research,
-            generation_instructions=generation_instructions,
-            signature_phrases=signature_phrases,
-            brand_name=brand_name,
             opening_formula=opening_formula,
             closing_formula=closing_formula,
+            structural_patterns=structural_patterns
+        )
+        try:
+            outline_result = LLMSingleton.get().invoke(prompt_planner)
+            outline = outline_result.content
+            logger.info("Planner generated outline successfully.")
+        except Exception as e:
+            logger.error("Planner LLM failed: %s", e)
+            outline = "[System Error: Unable to generate outline]"
+
+        # STEP 2: DRAFTER
+        prompt_drafter = WRITER_DRAFTER.format(
+            topic=topic,
+            content_type=content_type,
+            outline=outline,
+            brand_name=brand_name,
+            asset_bank=asset_bank,
+            research=research,
+            structural_examples=structural_examples
+        )
+        try:
+            draft_result = LLMSingleton.get().invoke(prompt_drafter)
+            draft = draft_result.content
+            logger.info("Drafter generated draft successfully.")
+        except Exception as e:
+            logger.error("Drafter LLM failed: %s", e)
+            draft = "[System Error: Unable to generate draft]"
+
+        # STEP 3: EDITOR
+        prompt_editor = WRITER_EDITOR.format(
+            draft=draft,
+            generation_instructions=generation_instructions,
             mechanical_rules=mechanical_rules,
             evidence_anchoring=evidence_anchoring,
             diagnostic_style=diagnostic_style,
             reframing_moves=reframing_moves,
-            structural_patterns=structural_patterns,
+            signature_phrases=signature_phrases,
             pronoun_pattern=pronoun_pattern,
             qualification_style=qualification_style,
-            tone_signature=tone_signature,
-            examples=examples,
-            approved=approved_str,
-            rejected=rejected_str,
-            asset_bank=asset_bank
+            tone_signature=tone_signature
         )
+        try:
+            editor_result = LLMSingleton.get().invoke(prompt_editor)
+            content = editor_result.content
+            logger.info("Editor finalized content successfully.")
+        except Exception as e:
+            logger.error("Editor LLM failed: %s", e)
+            content = f"[System Error: Unable to finalize content - {str(e)[:80]}]"
+
     else:
+        # REVISION: Only run the Editor (WRITER_REVISION) to fix feedback
         prompt = WRITER_REVISION.format(
             previous_content=state.get("content", ""),
             feedback=feedback,
@@ -247,7 +281,6 @@ def writer_node(state: GraphState, rag: BrandRAG, analyzer: BrandMetricsSQL,
             structure_match=state.get("structure_match", 0.0),
             signature_match=state.get("signature_match", 0.0),
             generation_instructions=generation_instructions,
-            signature_phrases=signature_phrases,
             brand_name=brand_name,
             opening_formula=opening_formula,
             closing_formula=closing_formula,
@@ -255,18 +288,18 @@ def writer_node(state: GraphState, rag: BrandRAG, analyzer: BrandMetricsSQL,
             evidence_anchoring=evidence_anchoring,
             diagnostic_style=diagnostic_style,
             reframing_moves=reframing_moves,
+            signature_phrases=signature_phrases,
             pronoun_pattern=pronoun_pattern,
             qualification_style=qualification_style,
             tone_signature=tone_signature,
             asset_bank=asset_bank
         )
-    
-    try:
-        result = LLMSingleton.get().invoke(prompt)
-        content = result.content
-    except Exception as e:
-        logger.error("LLM failed: %s", e)
-        content = f"[System Error: Unable to generate content - {str(e)[:80]}]"
+        try:
+            result = LLMSingleton.get().invoke(prompt)
+            content = result.content
+        except Exception as e:
+            logger.error("Revision LLM failed: %s", e)
+            content = f"[System Error: Unable to revise content - {str(e)[:80]}]"
 
     logger.info("Writer iteration=%d complete for topic=%r", iteration, topic)
 
