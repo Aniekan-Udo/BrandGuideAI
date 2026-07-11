@@ -7,20 +7,20 @@ const GeneratorPanel = () => {
   const { user } = useOutletContext<any>();
   const [contentType, setContentType] = useState('blog');
   const [topic, setTopic] = useState('');
-  const [formatType, setFormatType] = useState('');
   const [useSearch, setUseSearch] = useState(false);
   const [isGenerating, setIsGenerating] = useState(false);
-  
+
   const [status, setStatus] = useState('Idle');
   const [logs, setLogs] = useState<{ time: string, msg: string, type: string }[]>([]);
   const [generationId, setGenerationId] = useState('');
   const [generatedText, setGeneratedText] = useState('');
-  
+
   const [showFeedback, setShowFeedback] = useState(false);
   const [humanApproved, setHumanApproved] = useState(true);
   const [humanScore, setHumanScore] = useState(8.5);
   const [humanFeedback, setHumanFeedback] = useState('');
   const [isSubmittingFeedback, setIsSubmittingFeedback] = useState(false);
+  const [quotaError, setQuotaError] = useState<{ limit: number; used: number; reset_date: string } | null>(null);
 
   const consoleEndRef = useRef<HTMLDivElement>(null);
 
@@ -43,6 +43,7 @@ const GeneratorPanel = () => {
     setGeneratedText('');
     setShowFeedback(false);
     setGenerationId('');
+    setQuotaError(null);
     setStatus('Initializing');
     addLog('Connecting to BrandMuse AI content generator pipeline...', 'highlight');
 
@@ -58,10 +59,20 @@ const GeneratorPanel = () => {
           business_id: user.business_id,
           content_type: contentType,
           topic,
-          format_type: formatType,
           use_search: useSearch
         })
       });
+
+      if (response.status === 429) {
+        const body = await response.json().catch(() => ({}));
+        const detail = body?.detail;
+        if (detail?.code === 'QUOTA_EXHAUSTED') {
+          setQuotaError(detail);
+          setStatus('Limit Reached');
+          setIsGenerating(false);
+          return;
+        }
+      }
 
       if (!response.ok) throw new Error('Failed to initiate stream request');
       if (!response.body) throw new Error('ReadableStream not supported in this browser.');
@@ -106,11 +117,11 @@ const GeneratorPanel = () => {
             if (stateUpdate.content) setGeneratedText(stateUpdate.content);
             if (stateUpdate.feedback) addLog(`[Auditor Feedback] Revisions: ${stateUpdate.feedback}`);
           } catch (err) {
-             addLog(line); // Fallback for raw lines
+            addLog(line); // Fallback for raw lines
           }
         }
       }
-      
+
       setStatus('Completed');
       addLog('Content synthesis completed successfully!', 'success');
       setShowFeedback(true);
@@ -151,7 +162,20 @@ const GeneratorPanel = () => {
         <div className="content-card">
           <h2>Configure Creative Output</h2>
           <p className="card-subtitle">Define parameters to generate on-brand corporate messaging.</p>
-          
+
+          {quotaError && (
+            <div className="quota-exhausted-banner">
+              <div className="quota-icon"><i className="fa-solid fa-circle-exclamation"></i></div>
+              <div className="quota-body">
+                <strong>Daily Generation Limit Reached</strong>
+                <p>
+                  You've used <span className="quota-count">{quotaError.used}&thinsp;/&thinsp;{quotaError.limit}</span> generations today.
+                  Your quota resets tomorrow on <span className="quota-reset">{quotaError.reset_date}</span>.
+                </p>
+              </div>
+            </div>
+          )}
+
           <form onSubmit={handleGenerate}>
             <div className="input-group">
               <label>Content Format Profile</label>
@@ -184,10 +208,6 @@ const GeneratorPanel = () => {
               <input type="text" required value={topic} onChange={e => setTopic(e.target.value)} placeholder="e.g. Next-Generation RAG Optimization" />
             </div>
 
-            <div className="input-group">
-              <label>Style details & Length Constraints</label>
-              <input type="text" required value={formatType} onChange={e => setFormatType(e.target.value)} placeholder="e.g. 500 words, executive summary" />
-            </div>
 
             <div className="input-row toggle-row">
               <div className="toggle-container">
@@ -212,7 +232,7 @@ const GeneratorPanel = () => {
             <h2><i className="fa-solid fa-terminal"></i> Synthesizer Output Stream</h2>
             <div className={`output-status ${isGenerating ? 'running' : ''}`}>{status}</div>
           </div>
-          
+
           <div className="stream-console">
             {logs.length === 0 && !isGenerating && (
               <span className="placeholder-text"><i className="fa-solid fa-arrow-left"></i> Configure inputs and trigger the generation stream.</span>

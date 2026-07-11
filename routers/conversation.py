@@ -1,7 +1,8 @@
 from contextlib import asynccontextmanager
-from fastapi import Depends, Request, File
+from fastapi import Depends, Request, File, HTTPException
 from fastapi.responses import JSONResponse
 import asyncio
+from datetime import datetime, timezone, timedelta
 
 from uuid import uuid4
 
@@ -23,12 +24,60 @@ from schema import GenerateRequest, FeedbackRequest, TaskResponse
 @limiter.limit("60/minute")
 async def generate_stream(request: Request, body: GenerateRequest):
     from celery_task import generate_content
-    from database import get_db_session, Generation
+    from database import get_db_session, Generation, User
     from redis.asyncio import Redis as AsyncRedis
+
+
+    # ── Daily quota enforcement (Redis counter, resets at midnight UTC) ─────
+    async_redis = AsyncRedis(host="redis", port=6379, decode_responses=True)
+
+    with get_db_session() as session:
+        user: User | None = None
+        if body.user_id:
+            user = session.get(User, body.user_id)
+        if user is None:
+            user = session.query(User).filter(User.business_id == body.business_id).first()
+
+    if user:
+        now = datetime.now(timezone.utc)
+        today_str = now.strftime("%Y-%m-%d")
+        redis_key = f"daily_gen:{user.id}:{today_str}"
+
+        # Atomically increment; returns new value
+        daily_used = await async_redis.incr(redis_key)
+
+        # Set TTL to expire exactly at the next midnight UTC (only on first use)
+        if daily_used == 1:
+            seconds_until_midnight = (
+                86400
+                - now.hour * 3600
+                - now.minute * 60
+                - now.second
+            )
+            await async_redis.expire(redis_key, seconds_until_midnight)
+
+        if daily_used > user.monthly_generation_limit:
+            # Roll back the increment so it doesn't inflate future checks
+            await async_redis.decr(redis_key)
+
+            tomorrow = datetime(now.year, now.month, now.day, tzinfo=timezone.utc)
+            tomorrow += timedelta(days=1)
+
+            raise HTTPException(
+                status_code=429,
+                detail={
+                    "code": "QUOTA_EXHAUSTED",
+                    "message": "Daily generation limit reached.",
+                    "limit": user.monthly_generation_limit,
+                    "used": int(daily_used) - 1,
+                    "reset_date": tomorrow.strftime("%B %-d, %Y"),
+                    "reset_iso": tomorrow.isoformat(),
+                }
+            )
+    # ─────────────────────────────────────────────────────────────────────────
 
     generation_id = str(uuid4())
 
-    
     generate_content.delay(
         generation_id=generation_id,
         business_id=body.business_id,
