@@ -16,3 +16,4 @@ open http://localhost:5555  # Flower dashboard
 
 docker compose up -d --scale worker_generation=3
 
+
