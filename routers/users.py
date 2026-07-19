@@ -25,7 +25,7 @@ async def get_me(db: Annotated[Session, Depends(get_db)], token: Annotated[str, 
     return user
 
 
-@router.post("/create", response_model=UserResponse, status_code=201)
+@router.post("/create", status_code=201)
 @limiter.limit("2/minute")
 async def register_user(request: Request, user: UserCreate, db: Annotated[Session, Depends(get_db)]):
     try:
@@ -51,7 +51,8 @@ async def register_user(request: Request, user: UserCreate, db: Annotated[Sessio
         db.add(new_user)
         db.commit()
         db.refresh(new_user)
-        return new_user
+        token = create_access_token({"sub": str(new_user.id)})
+        return {"access_token": token, "token_type": "bearer", "user": new_user}
     except Exception as e:
         db.rollback()
         logger.error("Database error during user creation: %s", e)
