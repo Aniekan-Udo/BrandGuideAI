@@ -48,16 +48,16 @@ const Auth = () => {
     setIsLoading(true);
     setErrorMsg('');
     try {
-      await api.post('/users/create', {
+      const response = await api.post('/users/create', {
         first_name: regFirstName,
         last_name: regLastName,
         username: regUsername,
         email: regEmail,
         password: regPassword
       });
-      setActiveTab('login');
-      setErrorMsg('');
-      alert('Account registered! Please sign in.');
+      localStorage.setItem('bg_access_token', response.data.access_token);
+      window.location.href = '/dashboard';
+      
     } catch (err: any) {
       setErrorMsg(err.response?.data?.detail || 'Registration failed');
     } finally {
