@@ -1,13 +1,65 @@
-from pydantic import EmailStr, BaseModel, Field, field_validator
+from pydantic import EmailStr, BaseModel, Field, field_validator, model_validator
 from typing import Optional
+
+# Which research sources the researcher may draw on.
+#   rag   the brand's own product documents only
+#   web   Parallel's web search only
+#   both  both, with the brand's own documents authoritative
+RESEARCH_MODES = ("both", "rag", "web")
+RESEARCH_MODE_PATTERN = f"^({'|'.join(RESEARCH_MODES)})$"
+
+# Single source of truth for the content types the pipeline supports. The two
+# Field patterns below are built from it, and the document router validates
+# against it, so a type cannot be accepted for upload and then rejected — or
+# silently ignored — when the same user tries to clear it.
+CONTENT_TYPES = ("blog", "ad", "proposal", "script", "press_release")
+
+# Content types that tell a story rather than make claims about a business.
+# They have no client counts, percentages or methodology names to police, and
+# their section titles are the writer's own invention: a script forced to reuse
+# the "permitted" act titles harvested from another story is not being kept
+# honest, it is being made wrong.
+NARRATIVE_CONTENT_TYPES = ("script",)
+
+
+def is_narrative(content_type: str) -> bool:
+    return (content_type or "").strip().lower() in NARRATIVE_CONTENT_TYPES
+
+# How each type is named to the model, so a prompt asks for "a business
+# proposal" rather than for "a proposal" or an internal key.
+CONTENT_TYPE_LABELS = {
+    "blog": "blog post",
+    "ad": "ad copy",
+    "proposal": "business proposal",
+    "script": "script (video, audio or presentation)",
+    "press_release": "press release",
+}
+CONTENT_TYPE_PATTERN = f"^({'|'.join(CONTENT_TYPES)})$"
+
 
 class GenerateRequest(BaseModel):
     business_id: str
-    content_type: str = Field(..., pattern="^(blog|social|ad|proposal)$")
+    content_type: str = Field(..., pattern=CONTENT_TYPE_PATTERN)
     topic: str
     format_type: str
     user_id: Optional[int] = None
-    use_search: bool = False
+    # Default on: a caller posting the minimum body gets web research too.
+    use_search: bool = True
+    research_mode: str = Field(default="both", pattern=RESEARCH_MODE_PATTERN)
+    webhook_url: Optional[str] = None 
+
+    @model_validator(mode="after")
+    def _reconcile_research_selection(self):
+        # use_search is the older boolean and some callers still send only it.
+        # If research_mode was not named explicitly, derive it, so an existing
+        # client asking for use_search=false still gets RAG-only rather than
+        # silently having web search turned back on under it.
+        sent = self.model_fields_set
+        if "research_mode" not in sent and "use_search" in sent:
+            object.__setattr__(self, "research_mode", "both" if self.use_search else "rag")
+        # Keep the boolean in step for everything downstream that reads it.
+        object.__setattr__(self, "use_search", self.research_mode in ("both", "web"))
+        return self
 
 class FeedbackRequest(BaseModel):
     generation_id: str
@@ -20,14 +72,18 @@ class FeedbackRequest(BaseModel):
 
 class DocumentUploadRequest(BaseModel):
     business_id: str
-    content_type: str = Field(..., pattern="^(blog|social|ad|proposal)$")
-    platform: Optional[str] = None      # e.g. "instagram", "linkedin"
+    content_type: str = Field(..., pattern=CONTENT_TYPE_PATTERN)
+    platform: Optional[str] = None      # e.g. "linkedin", "google_ads"
     performance_metric: Optional[str] = None  # e.g. "highest_engagement"
 
 class TaskResponse(BaseModel):
     generation_id: str
     task_id: str
     status: str
+    # Set when an upload was accepted but looks like the wrong kind of document
+    # for the role it was given. Not an error: the document is processed either
+    # way, because only the person who uploaded it knows what it is.
+    warning: Optional[str] = None
 
 class ResultResponse(BaseModel):
     task_id: str
@@ -54,6 +110,23 @@ class UserResponse(BaseModel):
     username: str
     email: str
     business_id: str
+
+    class Config:
+        from_attributes = True
+
+
+class TokenResponse(BaseModel):
+    """Response for the endpoints that mint a token.
+
+    /users/create previously returned the User row itself with no
+    response_model, so FastAPI serialised every column — including the argon2
+    password hash — into the registration response. Declaring the shape here
+    means the hash cannot be returned even if the endpoint keeps handing over
+    the ORM object.
+    """
+    access_token: str
+    token_type: str
+    user: Optional[UserResponse] = None
 
     class Config:
         from_attributes = True

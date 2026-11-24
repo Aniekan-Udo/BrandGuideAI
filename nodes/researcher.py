@@ -1,15 +1,20 @@
 # nodes/researcher.py
 import logging
 from model import LLMSingleton
-from search import TavilySearch
-from brand_rag import BrandRAG
-from prompts.researcher import RESEARCH_SUMMARY
+from search import SearchPort
+from prompts.researcher import RESEARCH_SUMMARY, PUBLISHABLE_FACTS_FILTER
 from graph.state import GraphState
+from schema import CONTENT_TYPE_LABELS
+from utils.brand_profile import extract_section
+from utils.documents import has_reference_documents
 
 logger = logging.getLogger(__name__)
+from utils.research_sections import NO_RESEARCH, external_section, source_section
 from utils.observe import observe
+
+
 @observe("researcher_node")
-def researcher_node(state: GraphState, search: TavilySearch, rag: BrandRAG) -> GraphState:
+def researcher_node(state: GraphState, search: SearchPort) -> GraphState:
     """
     Retrieves research context for content generation.
 
@@ -19,35 +24,120 @@ def researcher_node(state: GraphState, search: TavilySearch, rag: BrandRAG) -> G
     Optional: performs web search when use_search is True,
     useful for trend-based or statistics-driven content.
 
+    `rag` and `analyzer` are resolved per call from state["business_id"] /
+    state["content_type"] (see graph/deps.py) rather than pre-bound, so this
+    node works unchanged whether the graph is compiled fresh per request
+    or compiled once and reused.
+
     Args:
         state:  Current graph state
-        search: Search port for optional web search
-        llm:    LLM model for summarizing web search results
-        rag:    RAG system for product document retrieval
+        search: Search port for optional web search (Parallel)
 
     Returns:
         Updated state with research context
     """
     topic = state["topic"]
     content_type = state["content_type"]
-    
 
-    if state.get("use_search", False):
-        raw_results = search.search(query=topic, max_results=5)
-        research = LLMSingleton.get().invoke(
-    RESEARCH_SUMMARY.format(
-        topic=topic,
-        content_type=content_type,
-        results=raw_results
-            )
-        ).content
-    else:
-        research = rag.query(topic)
+    # Which sources this run may draw on. research_mode is authoritative;
+    # use_search is the older boolean and is honoured when the mode was never
+    # set, so a caller that only knows about the boolean still gets what it
+    # asked for.
+    research_mode = (state.get("research_mode") or "").strip().lower()
+    if research_mode not in ("both", "rag", "web"):
+        research_mode = "both" if state.get("use_search", False) else "rag"
+    use_rag = research_mode in ("both", "rag")
+    use_web = research_mode in ("both", "web")
+    from graph.deps import resolve_deps
+    rag, analyzer, _memory = resolve_deps(state["business_id"], content_type)
 
+    # Extract brief brand context for research filtering (#7)
+    brand_context = "No brand context available — summarize neutrally."
+    try:
+        metrics = analyzer.get_context()
+        if metrics:
+            # Extract just the overview and value hierarchy for research filtering
+            overview = extract_section(metrics, "BRAND VOICE OVERVIEW")
+            value_hierarchy = extract_section(metrics, "VALUE HIERARCHY")
+            diagnostic = extract_section(metrics, "DIAGNOSTIC STYLE")
+
+            parts = [p for p in [overview, value_hierarchy, diagnostic] if p]
+            if parts:
+                brand_context = " ".join(parts)[:500]  # Cap at 500 chars
+    except Exception as e:
+        logger.warning("Failed to extract brand context for research: %s", e)
+
+    # RAG over the brand's own uploaded documents is ALWAYS run: those are the
+    # authoritative facts about the thing being written about. Web search, when
+    # enabled, is additive external context on top of it — previously the two
+    # were mutually exclusive, so turning search on silently discarded the
+    # product document the copy was supposed to be grounded in.
+    sources = []
+
+    owned = ""
+    if use_rag:
+        try:
+            owned = rag.query(topic) or ""
+        except Exception as e:
+            logger.warning("RAG query failed for topic=%r: %s", topic, e)
+
+    # Strip internal planning material out of reference-document content before
+    # the writer ever sees it. Only worth a call when this content type actually
+    # has reference documents indexed — past published content is publishable by
+    # definition and needs no filtering.
+    if owned.strip() and has_reference_documents(state["business_id"], content_type):
+        try:
+            cleaned = LLMSingleton.get("extraction").invoke(
+                PUBLISHABLE_FACTS_FILTER.format(source_material=owned)
+            ).content
+            if cleaned and cleaned.strip():
+                logger.info(
+                    "Publishable-facts filter applied: %d -> %d chars",
+                    len(owned), len(cleaned.strip()),
+                )
+                owned = cleaned.strip()
+            else:
+                logger.warning("Publishable-facts filter returned empty — keeping raw source")
+        except Exception as e:
+            # Fail open: unfiltered facts beat no facts. The enforcer's
+            # publishability gate is still there as the backstop.
+            logger.warning("Publishable-facts filter failed, using raw source: %s", e)
+
+    if owned.strip():
+        sources.append(source_section(owned))
+
+    external = ""
+    if use_web:
+        try:
+            raw_results = search.search(query=topic, max_results=5)
+            external = LLMSingleton.get().invoke(
+                RESEARCH_SUMMARY.format(
+                    topic=topic,
+                    content_type=CONTENT_TYPE_LABELS.get(content_type, content_type),
+                    results=raw_results,
+                    brand_context=brand_context
+                )
+            ).content or ""
+        except Exception as e:
+            logger.warning("Web search failed for topic=%r: %s", topic, e)
+
+        if external.strip():
+            sources.append(external_section(external))
+
+    research = "\n\n".join(sources)
+
+    if not research.strip():
+        research = NO_RESEARCH
+
+    mode = (
+        "rag+web_search" if (owned.strip() and external.strip())
+        else "web_search" if external.strip()
+        else "rag" if owned.strip()
+        else "none"
+    )
     logger.info(
-        "Research complete via %s for topic=%r",
-        "web_search" if state.get("use_search") else "rag",
-        topic
+        "Research complete via %s (mode=%s) for topic=%r (owned=%d chars, external=%d chars)",
+        mode, research_mode, topic, len(owned), len(external),
     )
 
     return {**state, "research": research}

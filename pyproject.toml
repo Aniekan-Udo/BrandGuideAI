@@ -1,19 +1,68 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+# This is an application, not a library. The code is flat modules plus the
+# graph/, nodes/, prompts/, routers/ and utils/ packages, imported from the
+# working directory (PYTHONPATH=/app in the container) rather than installed
+# into site-packages.
+#
+# Without this, an installer looks for a package matching the project name and
+# fails with "No file/folder found for package langgraph-marketing-automation",
+# or setuptools auto-discovery finds several top-level packages and refuses to
+# guess. Declaring no packages makes `pip install .` do the one thing that is
+# actually wanted here: install the dependencies.
+[tool.setuptools]
+packages = []
+py-modules = []
+
+# Same statement again for Poetry, which ignores [tool.setuptools] and has its
+# own notion of the "root package". Without this it tries to install the
+# project itself, finds no module named after it, and fails with:
+#
+#   The current project could not be installed:
+#   No file/folder found for package langgraph-marketing-automation
+#   If you do not want to install the current project use --no-root.
+#
+# Poetry is not used locally — this exists because some build platforms detect
+# a pyproject.toml and reach for Poetry regardless of what produced it.
+[tool.poetry]
+package-mode = false
+
 [project]
-name = "langgraph-marketing-automation"
-version = "0.1.0"
-description = "Add your description here"
-readme = "README.md"
-requires-python = ">=3.11"
+name = "brandmaestro-ai"
+version = "0.2.0"
+description = "Brand-voice content writing: blogs, ads, proposals, scripts and press releases, with any LLM provider"
+# Upper bound is deliberate. An open-ended ">=3.11" is read by resolvers as
+# including Python 4, and any dependency capped at "<4" then has no version
+# satisfying the range, so resolution fails with a confusing message.
+requires-python = ">=3.11,<4"
 dependencies = [
     "httpx>=0.28.1",
-    "langchain==0.1.20",
-    "langchain-community==0.0.38",
-    "langchain-core==0.1.52",
-    "langchain-groq>=0.1.5",
-    "langgraph>=0.0.51",
+    "langchain>=0.3,<0.4",
+    "langchain-community>=0.3,<0.4",
+    "langchain-core>=0.3,<0.4",
+    "langgraph>=0.2,<0.3",
+    "langchain-text-splitters>=0.3.11",
+    # Chat model adapters in model.py; LLM_PROVIDER picks one at runtime.
+    "langchain-google-vertexai>=2.0.0,<3",
+    "langchain-groq>=0.3,<0.4",
+    "langchain-anthropic>=0.3,<0.4",
+    # OpenAI and every OpenAI-compatible API: Gemini API, OpenRouter, DeepSeek, Ollama.
+    "langchain-openai>=0.3,<0.4",
+    # Embedding adapters in embedding_stategy.py (Vertex reuses the package above).
+    "voyageai>=0.3",
+    "fastembed>=0.4.2",
+    "llama-index-embeddings-fastembed>=0.6.0",
+    # YouTube Automation voices (youtube/voice.py).
+    "kokoro-onnx>=0.6.1",
+    "google-cloud-texttospeech>=2.16",
+    # YouTube Automation images (youtube/images.py).
+    "google-genai>=1.30",
+    "pillow>=10.4",
     "psycopg2-binary>=2.9.12",
     "structlog>=25.5.0",
-    "tavily>=1.1.0",
+    "parallel-web>=1.3.0,<2.0.0",
     "celery>=5.3.0",
     "flower>=2.0.0",
     "uvicorn>=0.29.0",
@@ -21,10 +70,8 @@ dependencies = [
     "redis>=7.4.0",
     "slowapi>=0.1.9",
     "python-multipart>=0.0.29",
-    "llama-index>=0.14.22",
+    "llama-index-core>=0.14.22",
     "llama-index-vector-stores-postgres>=0.8.1",
-    "llama-index-embeddings-fastembed>=0.6.0",
-    "fastembed>=0.4.2",
     "dotenv>=0.9.9",
     "pymupdf4llm>=1.27.2.3",
     "python-jose[cryptography]>=3.3.0",
@@ -32,12 +79,14 @@ dependencies = [
     "pydantic-settings>=2.14.1",
     "email-validator>=2.3.0",
     "pydantic[email]>=2.13.4",
+    "opik>=2.2.52",
 ]
 
 [dependency-groups]
 dev = [
-    "deepeval==1.4.2",
     "pytest>=9.0.3",
     "pytest-cov>=7.1.0",
-    "locust>=2.44.0",
+    "celery-types>=0.26.0",
+    # An ffmpeg binary for running the render tests without a system ffmpeg.
+    "imageio-ffmpeg>=0.6.0",
 ]

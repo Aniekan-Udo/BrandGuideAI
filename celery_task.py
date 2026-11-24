@@ -1,32 +1,46 @@
-from celery import Celery
-from kombu import Queue
-import os
+import json
 import logging
-from database import get_db_session
+import os
 
-from graph import state
+import redis
+from celery import Celery
+from celery.exceptions import SoftTimeLimitExceeded
+from kombu import Exchange, Queue
+
+from database import get_db_session
+# Imported at module level (worker boot time) rather than inside
+# _run_graph(), since importing opik itself costs ~8-10s — that must land on
+# worker startup, not on whichever live generation request runs first.
+from observability import get_trace_callbacks
 
 logger = logging.getLogger(__name__)
-import json
-import redis
-
-import redis
-redis_client = redis.Redis(host="redis", port=6379, decode_responses=True)
 
 # ---------------------------------------------------------------------------
 # Celery app
 # ---------------------------------------------------------------------------
 
-celery_app = Celery(
-    "brandguard",
-    broker=os.getenv("RABBIT_URL", "amqp://guest:guest@rabbitmq:5672//"),
-    backend=os.getenv("REDIS_URL", "redis://redis:6379/0")
+# Redis is the default broker rather than RabbitMQ. Redis is already required
+# for the Brand Brain cache, the result backend and the generation stream, so
+# brokering on it too removes an entire service — which matters wherever
+# managed RabbitMQ is not on offer (Render, Fly, most PaaS free tiers).
+#
+# RabbitMQ is still supported: set CELERY_BROKER_URL (or the legacy RABBIT_URL)
+# to an amqp:// URL and Celery uses it unchanged. The queue and routing config
+# below is transport-agnostic.
+# RABBIT_URL is deliberately NOT consulted: docker-compose no longer starts a
+# RabbitMQ service, so honouring a stale RABBIT_URL left in someone's .env
+# would point the broker at a host that is not running. Set CELERY_BROKER_URL
+# explicitly to use RabbitMQ.
+CELERY_BROKER_URL = (
+    os.getenv("CELERY_BROKER_URL")
+    or os.getenv("REDIS_URL", "redis://redis:6379/0")
 )
 
-
-from kombu import Queue, Exchange
-
-rag_exchange = Exchange("rag_refresh", type="direct")
+celery_app = Celery(
+    "brandguard",
+    broker=CELERY_BROKER_URL,
+    backend=os.getenv("REDIS_URL", "redis://redis:6379/0")
+)
 
 celery_app.conf.update(
     task_serializer="json",
@@ -48,26 +62,137 @@ celery_app.conf.update(
         "tasks.retrain":                     {"queue": "retraining"},
         "tasks.refresh_rag":                 {"queue": "rag_refresh"},
         "tasks.extract_metrics":             {"queue": "rag_refresh"},  
-        "tasks.promote_generation_feedback": {"queue": "rag_refresh"},  
+        "tasks.synthesize_metrics":          {"queue": "rag_refresh"},
     }
 )
 
-def get_redis():
-    return redis.Redis(host="redis", port=6379, decode_responses=True)
+def _run_pipeline(initial_state: dict) -> dict:
+    """Build and run the Researcher -> Writer -> Enforcer -> Deployer graph."""
+    import asyncio
 
-# In each task that needs it:
-r = get_redis()
+    from graph.graph import build_graph
+    from search import ParallelSearch
+
+    # Default to "" so a missing key raises ParallelSearch's ValueError with a
+    # readable message, instead of AttributeError on None.strip().
+    search = ParallelSearch(api_key=os.getenv("PARALLEL_API_KEY", ""))
+    graph_flow = build_graph(search)
+
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    try:
+        return loop.run_until_complete(_run_graph(graph_flow, initial_state))
+    finally:
+        loop.close()
+
+
+def _release_lock(lock, lock_key: str) -> None:
+    """Release a Redis lock without masking the original error.
+
+    redis-py raises LockNotOwnedError if the lock's TTL expired while the task
+    was still running. Raised from a finally block, that would replace the real
+    exception with a misleading one.
+    """
+    try:
+        lock.release()
+    except Exception as e:
+        logger.warning("Could not release lock %s: %s", lock_key, e)
+
+
+def _mark_generation_failed(
+    generation_id: str,
+    business_id: str,
+    content_type: str,
+    topic: str,
+    format_type: str,
+    user_id: int = None,
+) -> None:
+    """Write a terminal 'failed' status for a generation.
+
+    deployer_node only ever writes status='completed', so a pipeline that dies
+    before reaching it leaves no terminal row. Clients polling for completion
+    need this to stop waiting. Never raises - it runs inside an except block.
+    """
+    from datetime import datetime, timezone
+
+    from sqlalchemy.dialects.postgresql import insert as pg_insert
+
+    from database import Generation
+
+    try:
+        with get_db_session() as session:
+            stmt = pg_insert(Generation).values(
+                generation_id=generation_id,
+                business_id=business_id,
+                content_type=content_type,
+                topic=topic,
+                format_type=format_type,
+                user_id=user_id,
+                status="failed",
+                completed_at=datetime.now(timezone.utc),
+            ).on_conflict_do_update(
+                index_elements=["generation_id"],
+                set_={
+                    "status": "failed",
+                    "completed_at": datetime.now(timezone.utc),
+                },
+            )
+            session.execute(stmt)
+            session.commit()
+        logger.info("Marked generation_id=%s as failed", generation_id)
+    except Exception as e:
+        logger.error(
+            "Could not mark generation_id=%s as failed: %s", generation_id, e
+        )
+
+
+def get_redis():
+    return redis.Redis.from_url(
+        os.getenv("REDIS_URL", "redis://redis:6379/0"),
+        decode_responses=True,
+    )
+
+
+def get_async_redis():
+    from redis.asyncio import Redis
+    return Redis.from_url(
+        os.getenv("REDIS_URL", "redis://redis:6379/0"),
+        decode_responses=True,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Tasks
 # ---------------------------------------------------------------------------
 
+# How long a generation may take before the worker kills it.
+#
+# This was 300s while the streaming endpoint waits MAX_STREAM_SECONDS (900) for
+# the same task, so the worker was killing generations the UI was still
+# patiently waiting for. A real run with an 8-iteration cap takes four to
+# twelve minutes; nearly all of them crossed 300.
+#
+# What made that expensive rather than merely wrong: SoftTimeLimitExceeded is
+# an ordinary Exception, so it landed in the generic handler below and was
+# RETRIED, twice, ten seconds apart. One generation became up to three full
+# runs of a paid pipeline, each starting from scratch with its own research,
+# its own drafts and its own best-draft memory, all writing to one generation
+# row. That is the doubled event stream, and it is why a draft scored 9.2 by
+# one attempt was never a candidate when another attempt delivered 6.5.
+#
+# Derived from the same variable the stream reads so the two cannot drift apart
+# again, plus a minute for the delivery the soft limit interrupts.
+GENERATION_SOFT_LIMIT = int(os.getenv("MAX_STREAM_SECONDS", "900"))
+GENERATION_HARD_LIMIT = GENERATION_SOFT_LIMIT + 60
+
+
 @celery_app.task(
     bind=True,
     name="tasks.generate_content",
-    max_retries=2,              # reduce from 3
+    max_retries=2,
     default_retry_delay=10,
-    soft_time_limit=300,  # 5 minutes soft limit
-    time_limit=360          # graceful stop at 85s
+    soft_time_limit=GENERATION_SOFT_LIMIT,
+    time_limit=GENERATION_HARD_LIMIT,
 )
 def generate_content(
     self,
@@ -77,19 +202,14 @@ def generate_content(
     topic: str,
     format_type: str,
     user_id: int = None,
-    use_search: bool = False
+    use_search: bool = True,
+    research_mode: str = "both",
+    human_feedback: str = "",
+    regeneration_depth: int = 0,
+    parent_generation_id: str = "",
 ):
-    from brand_rag import BrandRAG, FastEmbedEmbedding
-    from brand_metrics import BrandMetricsSQL
-    from learning_memory import FeedbackPortSQL
-    from search import TavilySearch
-    from model import LLMSingleton
-    from graph.graph import build_graph
-    import asyncio
     from database import Generation
-    from datetime import datetime
     from graph.state import GraphState
-    import asyncio
 
     try:
         initial_state = GraphState(
@@ -98,13 +218,18 @@ def generate_content(
             topic=topic,
             format_type=format_type,
             user_id=user_id,
-            use_search=use_search,   
+            use_search=use_search,
+            research_mode=research_mode,
+            human_feedback=human_feedback,
+            regeneration_depth=regeneration_depth,
+            parent_generation_id=parent_generation_id,
             research="",
             content="",
             creative_angle="",
             iteration=0,
             approved=False,
             feedback="",
+            flagged_passages="",
             score=0.0,
             generation_id=generation_id,
             status="pending"
@@ -119,27 +244,41 @@ def generate_content(
                 )
                 return {"status": "completed", "generation_id": generation_id}
 
-        search   = TavilySearch(api_key=os.getenv("TAVILY_API_KEY"))
-        rag      = BrandRAG(
-                        business_id=business_id,
-                        content_type=content_type,
-                        embedding=FastEmbedEmbedding()
-                    )
-        analyzer = BrandMetricsSQL(
-                        business_id=business_id,
-                        content_type=content_type
-                    )
-        memory   = FeedbackPortSQL(business_id=business_id)
+        # Token accounting is per-generation, so start from zero and report what
+        # this run actually cost once it finishes (see model.TokenUsage).
+        from model import TokenUsage
+        TokenUsage.reset()
 
-        graph_flow = build_graph(search, rag, analyzer, memory)
+        final_state = _run_pipeline(initial_state)
 
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
         try:
-            final_state = loop.run_until_complete(_run_graph(graph_flow, initial_state))
-        finally:
-            loop.close()
+            from observability import log_token_usage_to_opik
+            usage = log_token_usage_to_opik(
+                label=f"{content_type}:{generation_id}",
+                extra={"iterations": final_state.get("iteration"),
+                       "approved": final_state.get("approved"),
+                       "score": final_state.get("score")},
+            )
+            logger.info(
+                "Generation %s token usage: calls=%s prompt=%s output=%s cached=%s",
+                generation_id, usage["calls"], usage["prompt_tokens"],
+                usage["output_tokens"], usage["cached_tokens"],
+            )
+        except Exception as e:
+            logger.debug("Token usage reporting skipped: %s", e)
 
+        # _run_graph swallows graph exceptions and flags the state instead of
+        # raising, so the deployer never ran and no terminal row exists.
+        if final_state.get("status") == "failed":
+            _mark_generation_failed(
+                generation_id=generation_id,
+                business_id=business_id,
+                content_type=content_type,
+                topic=topic,
+                format_type=format_type,
+                user_id=user_id,
+            )
+            return {"status": "failed", "generation_id": generation_id}
 
         logger.info(
             "Generation complete business_id=%s generation_id=%s score=%.1f",
@@ -154,26 +293,74 @@ def generate_content(
             "score":         final_state.get("score", 0.0)
         }
 
+    except SoftTimeLimitExceeded:
+        # Never retried. A generation that ran out of time will run out of time
+        # again, and starting it over spends another full pipeline to arrive at
+        # the same place — while the first attempt's events are still arriving
+        # on the same stream, so the two attempts interleave and whichever
+        # finishes last overwrites the other's work.
+        logger.error(
+            "Generation exceeded %ds business_id=%s generation_id=%s — not retried",
+            GENERATION_SOFT_LIMIT, business_id, generation_id,
+        )
+        _mark_generation_failed(
+            generation_id=generation_id,
+            business_id=business_id,
+            content_type=content_type,
+            topic=topic,
+            format_type=format_type,
+            user_id=user_id,
+        )
+        raise
+
     except Exception as exc:
         logger.error(
             "Generation failed business_id=%s generation_id=%s: %s",
             business_id, generation_id, exc
         )
-        raise self.retry(exc=exc, countdown=10)
+        try:
+            raise self.retry(exc=exc, countdown=10)
+        except self.MaxRetriesExceededError:
+            # No retries left. The /generate/stream endpoint polls this row to
+            # decide when to stop streaming; without a terminal status it would
+            # hold the connection open until MAX_STREAM_SECONDS.
+            _mark_generation_failed(
+                generation_id=generation_id,
+                business_id=business_id,
+                content_type=content_type,
+                topic=topic,
+                format_type=format_type,
+                user_id=user_id,
+            )
+            raise
 
 
 async def _run_graph(graph_flow, initial_state):
-    from redis.asyncio import Redis
+    import asyncio
 
-    async_redis = Redis(host="redis", port=6379, decode_responses=True)
+    async_redis = get_async_redis()
 
     final_state = dict(initial_state)
     generation_id = initial_state['generation_id']
+    business_id = initial_state['business_id']
+    content_type = initial_state['content_type']
     stream_failed = False
 
+    debounce_key = f"debounce_synthesis:{business_id}:{content_type}"
     try:
-        async for chunk in graph_flow.astream(initial_state):
-            final_state.update(chunk)
+        while await async_redis.exists(debounce_key):
+            logger.info("Documents are processing. Pausing generation for %s...", business_id)
+            await asyncio.sleep(5)
+
+        trace_callbacks = get_trace_callbacks(
+            graph_flow,
+            tags=[content_type, f"research:{initial_state.get('research_mode', 'both')}"],
+        )
+
+        async for chunk in graph_flow.astream(initial_state, config={"callbacks": trace_callbacks}):
+            for node_name, node_state in chunk.items():
+                if isinstance(node_state, dict):
+                    final_state.update(node_state)
 
             if stream_failed:
                 continue
@@ -187,11 +374,13 @@ async def _run_graph(graph_flow, initial_state):
                 logger.warning("Stream failed for %s: %s", generation_id, e)
                 stream_failed = True
                 # Continue processing, just stop streaming
-                # Client will poll DB for final result          
+                # Client will poll DB for final result
     except Exception as e:
         logger.error("Graph execution failed: %s", e)
         # Still save to DB what we got
         final_state["status"] = "failed"
+    finally:
+        await async_redis.aclose()
 
     return final_state
 
@@ -227,41 +416,58 @@ def process_feedback(
                 logger.info(f"Feedback for {generation_id} already saved, skipping")
                 return {"status": "already_saved", "generation_id": generation_id}
 
-        memory.save_feedback(
+        saved = memory.save_feedback(
             generation_id=generation_id,
             human_approved=human_approved,
             human_score=human_score,
             human_feedback=human_feedback
         )
+        if not saved:
+            # Nothing to attach the verdict to, and nothing further will work:
+            # retraining counts rows that do not exist and the rewrite step
+            # looks for a rejection that was never written down. Said plainly
+            # here because every other layer reports success.
+            logger.error(
+                "FEEDBACK NOT SAVED generation_id=%s — no generation exists with that id, so "
+                "the review was discarded and no rewrite was queued", generation_id,
+            )
+            return {"status": "no_such_generation", "generation_id": generation_id}
 
         RETRAIN_THRESHOLD = 100
 
         with get_db_session() as session:
+            # No FOR UPDATE here: PostgreSQL rejects it alongside an aggregate
+            # ("FOR UPDATE is not allowed with aggregate functions"). The
+            # UPDATE below is atomic on its own, and its rowcount tells us
+            # whether this worker or a concurrent one claimed the batch.
             unprocessed = session.query(ReviewerLearning).filter_by(
                 business_id=business_id,
                 content_type=content_type,
                 has_human_feedback=True,
                 used_for_retraining=False
-            ).with_for_update().count()
+            ).count()
 
             if unprocessed >= RETRAIN_THRESHOLD:
-                session.query(ReviewerLearning).filter_by(
+                claimed = session.query(ReviewerLearning).filter_by(
                     business_id=business_id,
                     content_type=content_type,
                     has_human_feedback=True,
                     used_for_retraining=False
-                ).update({"used_for_retraining": True})
+                ).update({"used_for_retraining": True}, synchronize_session=False)
                 session.commit()
 
-                retrain.delay(
-                    business_id=business_id,
-                    content_type=content_type
-                )
-
-                logger.info(
-                    "Retraining triggered business_id=%s unprocessed=%d",
-                    business_id, unprocessed
-                )
+                if claimed:
+                    retrain.delay(
+                        business_id=business_id,
+                        content_type=content_type
+                    )
+                    logger.info(
+                        "Retraining triggered business_id=%s claimed=%d",
+                        business_id, claimed
+                    )
+        
+        from human_loop import handle_review_outcome
+        handle_review_outcome(generation_id)
 
         return {"status": "saved", "generation_id": generation_id}
 
@@ -278,7 +484,8 @@ def process_feedback(
 )
 def retrain(self, business_id, content_type):
     lock_key = f"retrain:{business_id}:{content_type}"
-    lock = redis_client.lock(lock_key, timeout=300)
+    r = get_redis()
+    lock = r.lock(lock_key, timeout=300)
 
     if not lock.acquire(blocking=False):
         logger.info(f"Retraining already running for {business_id}, skipping")
@@ -291,8 +498,8 @@ def retrain(self, business_id, content_type):
                         business_id=business_id,
                         content_type=content_type
                     )
-        analyzer._metrics_cache = None
-        analyzer._extract_metrics()
+        analyzer.invalidate_cache()
+        analyzer.build_and_cache_context()
 
         return {"status": "retrained", "business_id": business_id}
 
@@ -301,7 +508,53 @@ def retrain(self, business_id, content_type):
         raise self.retry(exc=exc, countdown=60)
 
     finally:
-        lock.release()
+        _release_lock(lock, lock_key)
+
+
+_WEBHOOK_BLOCKED_HOSTS = {
+    "localhost", "127.0.0.1", "0.0.0.0", "[::1]",
+    "metadata.google.internal", "169.254.169.254",
+}
+
+def _validate_webhook_url(url: str) -> str:
+    """Validate webhook URL to prevent SSRF attacks."""
+    from urllib.parse import urlparse
+    parsed = urlparse(url)
+    if parsed.scheme not in ("https",):
+        raise ValueError(f"Webhook URL must use HTTPS, got '{parsed.scheme}'")
+    hostname = (parsed.hostname or "").lower()
+    if not hostname or hostname in _WEBHOOK_BLOCKED_HOSTS:
+        raise ValueError(f"Webhook hostname '{hostname}' is not allowed")
+    if hostname.startswith("10.") or hostname.startswith("192.168.") or hostname.startswith("172."):
+        raise ValueError(f"Webhook URL must not target private IP ranges")
+    return url
+
+
+@celery_app.task(bind=True, name="tasks.send_notification", max_retries=3, default_retry_delay=10)
+def send_notification(self, webhook_url: str, content: str, generation_id: str, topic: str):
+    import httpx
+    try:
+        webhook_url = _validate_webhook_url(webhook_url)
+    except ValueError as e:
+        logger.error("Invalid webhook URL for generation_id=%s: %s", generation_id, e)
+        return False
+
+    payload = {
+        "generation_id": generation_id,
+        "topic": topic,
+        "message": "Your content is ready for review.",
+        "preview": content[:300]
+    }
+    try:
+        with httpx.Client() as client:
+            response = client.post(webhook_url, json=payload, timeout=10)
+            response.raise_for_status()
+            logger.info("Notification sent for generation_id=%s", generation_id)
+            return True
+    except (httpx.HTTPError, httpx.RequestError) as e:
+        logger.error("Notification failed for generation_id=%s: %s", generation_id, e)
+        raise self.retry(exc=e, countdown=10)
+    
 
 
 @celery_app.task(
@@ -310,24 +563,38 @@ def retrain(self, business_id, content_type):
     max_retries=3,
     default_retry_delay=10
 )
-def refresh_rag(self, business_id, content_type, new_doc_content):
+def refresh_rag(self, business_id, content_type, new_doc_content, doc_id=None):
+    """Index a reference document for retrieval.
+
+    doc_id is optional and used only to record the outcome on the document row:
+    a reference document is processed here rather than by extract_metrics, so
+    without it a reference upload had no path to a terminal status at all and
+    stayed 'pending' even once it was indexed and being retrieved.
+    """
     import hashlib
-    from brand_rag import BrandRAG, FastEmbedEmbedding
+    from brand_rag import BrandRAG
+    from embedding_stategy import EmbeddingSingleton
     from brand_metrics import BrandMetricsSQL
 
-    doc_hash = hashlib.sha256(new_doc_content.encode()).hexdigest()
-    lock_key = f"rag_refresh:{business_id}:{content_type}:{doc_hash}"
-    lock = redis_client.lock(lock_key, timeout=120)
-
-    if not lock.acquire(blocking=False):
-        logger.info("RAG refresh already running for this document")
-        return {"status": "skipped", "reason": "already_running"}
-
+    lock = None
     try:
+        # None means full rebuild (document deletion path) — no hash needed
+        if new_doc_content is not None:
+            doc_hash = hashlib.sha256(new_doc_content.encode()).hexdigest()
+            lock_key = f"rag_refresh:{business_id}:{content_type}:{doc_hash}"
+            lock = get_redis().lock(lock_key, timeout=120)
+
+            if not lock.acquire(blocking=False):
+                logger.info("RAG refresh already running for this document")
+                # Another worker holds the lock for this exact content, so the
+                # document is being indexed — not left unprocessed.
+                _set_document_status(doc_id, DOC_STATUS_COMPLETED)
+                return {"status": "skipped", "reason": "already_running"}
+
         rag = BrandRAG(
             business_id=business_id,
             content_type=content_type,
-            embedding=FastEmbedEmbedding()
+            embedding=EmbeddingSingleton.get()
         )
         analyzer = BrandMetricsSQL(
             business_id=business_id,
@@ -339,14 +606,62 @@ def refresh_rag(self, business_id, content_type, new_doc_content):
             "RAG refresh complete business_id=%s content_type=%s",
             business_id, content_type
         )
+        _set_document_status(doc_id, DOC_STATUS_COMPLETED)
         return {"status": "refreshed", "business_id": business_id}
 
     except Exception as exc:
         logger.error("RAG refresh failed business_id=%s: %s", business_id, exc)
+        if _retries_exhausted(self):
+            _set_document_status(doc_id, DOC_STATUS_FAILED, str(exc))
         raise self.retry(exc=exc, countdown=10)
 
     finally:
-        lock.release()
+        if lock is not None:
+            _release_lock(lock, lock_key)
+
+
+DOC_STATUS_PENDING = "pending"
+DOC_STATUS_COMPLETED = "completed"
+DOC_STATUS_FAILED = "failed"
+
+
+def _set_document_status(doc_id, status: str, error: str | None = None) -> None:
+    """Record how processing of one uploaded document ended.
+
+    BrandDocument.status defaults to 'pending' and, until this existed, nothing
+    ever moved it — so every document a user uploaded showed as pending forever,
+    including the ones already extracted into the Brand Brain. The status column
+    and the UI badge reading it were both already there; only the write was
+    missing.
+
+    Never raises. A document that processed correctly must not be reported as
+    failed because the bookkeeping write failed.
+    """
+    if doc_id is None:
+        return
+    try:
+        from database import BrandDocument, get_db_session
+        from sqlalchemy import func as sa_func
+
+        with get_db_session() as session:
+            updated = session.query(BrandDocument).filter_by(id=doc_id).update(
+                {
+                    "status": status,
+                    "error_message": (error or "")[:2000] or None,
+                    "processed_at": sa_func.now(),
+                },
+                synchronize_session=False,
+            )
+            session.commit()
+        if not updated:
+            logger.warning("No document row %s to mark %s", doc_id, status)
+    except Exception as exc:
+        logger.warning("Could not mark document %s as %s: %s", doc_id, status, exc)
+
+
+def _retries_exhausted(task) -> bool:
+    """Whether this is the task's final attempt, so a failure is terminal."""
+    return (task.request.retries or 0) >= (task.max_retries or 0)
 
 
 @celery_app.task(bind=True, name="tasks.extract_metrics", max_retries=3, default_retry_delay=10)
@@ -356,42 +671,49 @@ def extract_metrics(self, business_id: str, content_type: str, doc_id: int, doc_
     try:
         inserted = analyzer.extract_and_save(doc_id=doc_id, doc_content=doc_content)
         if not inserted:
+            # Already extracted — the document IS in the Brand Brain, which is
+            # what the status reports, so this is a success and not a skip.
+            _set_document_status(doc_id, DOC_STATUS_COMPLETED)
             return {"status": "skipped", "reason": "already_extracted"}
 
-        lock_key = f"context_rebuild:{business_id}:{content_type}"
-        lock = redis_client.lock(lock_key, timeout=180)
-        if not lock.acquire(blocking=True, blocking_timeout=30):
-            return {"status": "complete", "synthesis": "deferred"}
-        try:
-            analyzer.build_and_cache_context()
-        finally:
-            lock.release()
+        analyzer.invalidate_cache()
+        debounce_key = f"debounce_synthesis:{business_id}:{content_type}"
+        
+        if get_redis().set(debounce_key, "1", nx=True, ex=15):
+            synthesize_metrics.apply_async(
+                kwargs={"business_id": business_id, "content_type": content_type},
+                countdown=15
+            )
+            logger.info("Queued debounced synthesis for %s", business_id)
 
-        return {"status": "complete", "business_id": business_id, "doc_id": doc_id}
+        _set_document_status(doc_id, DOC_STATUS_COMPLETED)
+        return {"status": "complete", "business_id": business_id, "doc_id": doc_id, "synthesis": "debounced"}
     except Exception as exc:
+        # Only the last attempt is terminal; marking failed on the first would
+        # show a document as failed while a retry was still pending.
+        if _retries_exhausted(self):
+            _set_document_status(doc_id, DOC_STATUS_FAILED, str(exc))
         raise self.retry(exc=exc, countdown=10)
 
 
-@celery_app.task(bind=True, name="tasks.promote_generation_feedback", max_retries=3, default_retry_delay=30)
-def promote_generation_feedback(self, business_id: str, content_type: str, generation_content: str, human_approved: bool, score: float):
-    from brand_metrics import BrandMetricsSQL
-
-    score_weight = 2.0 if human_approved else (1.5 if score >= 9.0 else 1.2)
-    analyzer = BrandMetricsSQL(business_id=business_id, content_type=content_type)
-
+@celery_app.task(bind=True, name="tasks.synthesize_metrics", max_retries=2, default_retry_delay=30)
+def synthesize_metrics(self, business_id: str, content_type: str):
+    lock_key = f"synthesize_lock:{business_id}:{content_type}"
+    r = get_redis()
+    lock = r.lock(lock_key, timeout=180)
+    
+    if not lock.acquire(blocking=False):
+        logger.info("Synthesis already running for %s, skipping", business_id)
+        return {"status": "skipped", "reason": "already_running"}
+        
     try:
-        inserted = analyzer.save_generation_feedback(generation_content=generation_content, score_weight=score_weight)
-        if not inserted:
-            return {"status": "skipped", "reason": "already_processed"}
-
-        lock_key = f"context_rebuild:{business_id}:{content_type}"
-        lock = redis_client.lock(lock_key, timeout=180)
-        if lock.acquire(blocking=True, blocking_timeout=30):
-            try:
-                analyzer.build_and_cache_context()
-            finally:
-                lock.release()
-
-        return {"status": "complete", "score_weight": score_weight}
+        from brand_metrics import BrandMetricsSQL
+        analyzer = BrandMetricsSQL(business_id=business_id, content_type=content_type)
+        logger.info("Running debounced synthesis for %s", business_id)
+        analyzer.build_and_cache_context()
+        return {"status": "complete", "business_id": business_id}
     except Exception as exc:
+        logger.error("Debounced synthesis failed for %s: %s", business_id, exc)
         raise self.retry(exc=exc, countdown=30)
+    finally:
+        _release_lock(lock, lock_key)

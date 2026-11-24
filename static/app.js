@@ -14,6 +14,33 @@ let appState = {
 // API Base URL config (Relative routes work on same origin)
 const API_BASE = window.location.origin;
 
+// Content types the pipeline supports, in display order. Mirrors
+// schema.CONTENT_TYPES on the server.
+const CONTENT_TYPES = ['blog', 'ad', 'proposal', 'script', 'press_release'];
+
+const CONTENT_TYPE_LABELS = {
+    blog:          'Blog Post',
+    ad:            'Ad Copy',
+    proposal:      'Proposal',
+    script:        'Script',
+    press_release: 'Press Release',
+};
+
+// The writer takes format_type as a hint about the artefact being written.
+// Each content type corresponds to one artefact, so there is nothing for a
+// user to choose here and no control for it.
+const FORMAT_TYPES = {
+    blog:          'long-form blog article',
+    ad:            'ad copy with headline, body and call to action',
+    proposal:      'business proposal',
+    script:        'video or audio script',
+    press_release: 'press release',
+};
+
+function contentTypeLabel(contentType) {
+    return CONTENT_TYPE_LABELS[contentType] || (contentType || '').toUpperCase();
+}
+
 // --- INITIALIZATION ---
 document.addEventListener('DOMContentLoaded', () => {
     // Check if user has a token already
@@ -65,7 +92,7 @@ function hideAuthGate() {
 function switchAuthTab(tabName) {
     document.querySelectorAll('.auth-tab').forEach(btn => btn.classList.remove('active'));
     document.querySelectorAll('.auth-form').forEach(form => form.classList.remove('active'));
-    
+
     if (tabName === 'login') {
         document.getElementById('tab-login').classList.add('active');
         document.getElementById('form-login').classList.add('active');
@@ -135,8 +162,14 @@ async function handleRegister(e) {
             throw new Error(err.detail || 'Registration failed');
         }
 
-        showToast('Account registered! Please sign in.', 'success');
-        switchAuthTab('login');
+        // /users/create already mints a token for the new account, so making
+        // the user sign in again immediately is a round trip that proves
+        // nothing. Take them straight into the workspace.
+        const data = await response.json();
+        appState.token = data.access_token;
+        localStorage.setItem('bg_access_token', appState.token);
+        showToast(`Welcome, ${first_name} — your workspace is ready`, 'success');
+        await initSession();
     } catch (err) {
         showToast(err.message, 'error');
     } finally {
@@ -167,14 +200,14 @@ async function initSession() {
         }
 
         appState.user = await response.json();
-        
+
         // Update user interfaces
         document.getElementById('display-user-fullname').innerText = `${appState.user.first_name} ${appState.user.last_name}`;
         document.getElementById('display-business-id').innerText = appState.user.business_id;
-        
+
         hideAuthGate();
         switchPanel('dashboard');
-        
+
         // Initial dashboard data loading
         loadRecentGenerations();
         loadUploadedDocsList();
@@ -191,29 +224,81 @@ async function initSession() {
 
 function switchPanel(panelId) {
     appState.activePanel = panelId;
-    
+
     // Switch Sidebar Navigation Active state
     document.querySelectorAll('.nav-item').forEach(item => item.classList.remove('active'));
     document.getElementById(`nav-${panelId}`).classList.add('active');
-    
+
     // Toggle Section Panel visibilities
     document.querySelectorAll('.dashboard-panel').forEach(panel => panel.classList.remove('active'));
     document.getElementById(`panel-${panelId}`).classList.add('active');
-    
+
     // Update Page Header Titles
     const titleMap = {
         'dashboard': { t: 'Dashboard Overview', s: 'Track and configure your brand voice rules, generation capacity, and memory metrics.' },
         'generator': { t: 'Content Synthesizer', s: 'Generate high-fidelity marketing collateral tailored using deep brand voice RAG filters.' },
         'documents': { t: 'Guidelines & Reference Documents', s: 'Manage reference text sources mapped to feed the Brand Memory vectors.' },
-        'patterns': { t: 'Active Model Memory & Synapses', s: 'Explore brand-aligned guidelines and restrictions synthesized directly from human review loops.' }
+        'patterns': { t: 'Active Model Memory & Synapses', s: 'Explore brand-aligned guidelines and restrictions synthesized directly from human review loops.' },
+        'brain': { t: 'Synthesised Brand Brain', s: 'The voice profile extracted from this brand’s own documents, exactly as the writer and enforcer receive it.' },
+        'youtube': { t: 'YouTube Studio', s: 'Cast characters, voice approved scripts, render, and publish stories to YouTube.' }
     };
-    
+
     document.getElementById('page-title').innerText = titleMap[panelId].t;
     document.getElementById('page-subtitle').innerText = titleMap[panelId].s;
 
     if (panelId === 'patterns') {
         // Auto-refresh memory patterns on switch
         loadMemoryPatterns('blog');
+    }
+
+    if (panelId === 'brain') {
+        loadBrandBrain('blog');
+    }
+
+    // YouTube Studio lives in static/youtube.js and may be absent.
+    if (panelId === 'youtube' && window.ytStudio) {
+        window.ytStudio.open();
+    }
+}
+
+// Fetch and show the synthesised voice profile for one content type. Rendered
+// as text rather than parsed into fields: the Brain is a document the writer
+// reads whole, and slicing it into a dashboard here would show something the
+// pipeline never sees.
+async function loadBrandBrain(contentType) {
+    const body = document.getElementById('brain-text');
+    const badge = document.getElementById('brain-status-badge');
+
+    CONTENT_TYPES.forEach(t => {
+        const btn = document.getElementById('btn-brain-' + t);
+        if (btn) btn.classList.toggle('active', t === contentType);
+    });
+
+    badge.innerText = 'Loading';
+    badge.className = 'output-status running';
+    body.innerText = '';
+
+    try {
+        const response = await fetch(`${API_BASE}/documents/brand-brain/${contentType}`, {
+            headers: { 'Authorization': `Bearer ${appState.token}` }
+        });
+        if (!response.ok) throw new Error('Failed to load the Brand Brain');
+
+        const data = await response.json();
+        if (!data.exists) {
+            badge.innerText = 'Not synthesised';
+            badge.className = 'output-status';
+            body.innerHTML = '<span class="placeholder-text">No Brand Brain yet for this profile. Upload brand-voice documents for it and the Brain is synthesised in the background.</span>';
+            return;
+        }
+
+        body.innerText = data.brand_brain;
+        badge.innerText = data.characters.toLocaleString() + ' chars';
+        badge.className = 'output-status success';
+    } catch (err) {
+        badge.innerText = 'Error';
+        badge.className = 'output-status error';
+        body.innerHTML = '<span class="placeholder-text">' + err.message + '</span>';
     }
 }
 
@@ -225,33 +310,100 @@ function selectFormatCard(input) {
 
 // --- REAL-TIME SSE CONTENT STREAM GENERATION ---
 
+// The researcher emits one blob holding the brand's own documents and, when
+// web search is on, the Parallel results. Splitting it into two labelled
+// sections is what lets anyone watching see which facts came from where -
+// previously this was logged as the first 100 characters and nothing else, so
+// the web search was invisible even when it had run.
+function renderResearch(research) {
+    const box = document.getElementById('research-box');
+    const ownedText = document.getElementById('research-owned-text');
+    const extWrap = document.getElementById('research-external-wrap');
+    const extText = document.getElementById('research-external-text');
+    const badge = document.getElementById('research-source-badge');
+
+    const NL = String.fromCharCode(10);
+    const BAR = String.fromCharCode(9552, 9552, 9552); // the box-drawing banner
+
+    // Drop the banner lines, then the instruction paragraph under them. Those
+    // lines address the writer, not the reader ("Use it for framing", "Do NOT
+    // use it to assert facts"), and showing them here puts prompt scaffolding
+    // on screen where the research is supposed to be. Both blocks separate
+    // that paragraph from the content with a blank line, so cut to the first
+    // one - but only if it comes early, so a block without a preamble keeps
+    // all of its content.
+    const clean = t => {
+        const lines = t.split(NL).filter(l => l.indexOf(BAR) === -1);
+        while (lines.length && !lines[0].trim()) lines.shift();
+        const blank = lines.findIndex(l => !l.trim());
+        if (blank > 0 && blank <= 6) return lines.slice(blank + 1).join(NL).trim();
+        return lines.join(NL).trim();
+    };
+
+    const marker = research.indexOf('EXTERNAL CONTEXT');
+    let owned = research;
+    let external = '';
+    if (marker !== -1) {
+        const lineStart = research.lastIndexOf(NL, marker);
+        const cut = lineStart === -1 ? marker : lineStart;
+        owned = research.slice(0, cut);
+        external = research.slice(cut);
+    }
+
+    ownedText.innerText = clean(owned) || 'No brand documents retrieved for this topic.';
+
+    const externalClean = clean(external);
+    if (externalClean) {
+        extText.innerText = externalClean;
+        extWrap.classList.remove('hidden');
+        badge.innerText = 'brand documents + Parallel web search';
+    } else {
+        extWrap.classList.add('hidden');
+        badge.innerText = 'brand documents only';
+    }
+
+    box.classList.remove('hidden');
+}
+
 async function triggerGeneration(e) {
     e.preventDefault();
-    
+
     const contentType = document.querySelector('input[name="content_type"]:checked').value;
     const topic = document.getElementById('gen-topic').value;
-    const formatType = document.getElementById('gen-format-type').value;
-    const useSearch = document.getElementById('gen-use-search').checked;
-    
+    // Derived from the chosen content type rather than read from a control.
+    // This previously read #gen-format-type, an element that does not exist in
+    // the page: getElementById returned null, .value threw a TypeError before
+    // the try block below, and clicking Generate did nothing at all — no
+    // request, no error, no console output. Generation from the UI had never
+    // worked, only from the API directly.
+    const formatType = FORMAT_TYPES[contentType] || contentType;
+    const researchModeEl = document.querySelector('input[name="research_mode"]:checked');
+    const researchMode = researchModeEl ? researchModeEl.value : 'both';
+
     const submitBtn = document.getElementById('btn-generate-submit');
     const statusBadge = document.getElementById('generation-status-badge');
     const consoleDiv = document.getElementById('stream-console');
     const outputBox = document.getElementById('generated-output-box');
     const renderedDiv = document.getElementById('rendered-content-text');
     const feedbackBox = document.getElementById('feedback-card-container');
-    
+
     // Reset output UIs
     consoleDiv.innerHTML = '';
     renderedDiv.innerHTML = '';
     outputBox.classList.add('hidden');
     feedbackBox.classList.add('hidden');
-    
+    document.getElementById('research-box').classList.add('hidden');
+    document.getElementById('research-owned-text').innerText = '';
+    document.getElementById('research-external-text').innerText = '';
+    document.getElementById('research-external-wrap').classList.add('hidden');
+    document.getElementById('research-source-badge').innerText = '';
+
     submitBtn.disabled = true;
     submitBtn.classList.add('loading');
     statusBadge.innerText = 'Initializing';
     statusBadge.className = 'output-status running';
 
-    logConsole('Connecting to BrandMuse AI content generator pipeline...', 'highlight');
+    logConsole('Connecting to BrandMaestro AI content generator pipeline...', 'highlight');
 
     try {
         const response = await fetch(`${API_BASE}/conversation/generate/stream`, {
@@ -265,7 +417,7 @@ async function triggerGeneration(e) {
                 content_type: contentType,
                 topic: topic,
                 format_type: formatType,
-                use_search: useSearch
+                research_mode: researchMode
             })
         });
 
@@ -278,6 +430,13 @@ async function triggerGeneration(e) {
         let buffer = '';
         let generationId = '';
         let fullGeneratedText = '';
+        // The auditor's verdict, which is not the same thing as the run finishing.
+        // A draft that runs out of revision rounds is still saved and still
+        // streamed, and the UI called that 'Completed' — so the one draft that
+        // most needed a reviewer's eye arrived looking like the approved ones.
+        let lastApproved = null;
+        // What the console has already said, per field, for this run.
+        const lastLogged = {};
 
         while (true) {
             const { value, done } = await reader.read();
@@ -285,7 +444,7 @@ async function triggerGeneration(e) {
 
             buffer += decoder.decode(value, { stream: true });
             const lines = buffer.split('\n');
-            
+
             // Save last unfinished item in buffer
             buffer = lines.pop();
 
@@ -293,7 +452,7 @@ async function triggerGeneration(e) {
                 if (!line.trim()) continue;
                 try {
                     const chunk = JSON.parse(line);
-                    
+
                     // First chunk returns the generated UUID
                     if (chunk.generation_id && !generationId) {
                         generationId = chunk.generation_id;
@@ -302,31 +461,76 @@ async function triggerGeneration(e) {
                         continue;
                     }
 
+                    // The server emits a heartbeat while a node is mid-LLM-call.
+                    // Surfacing the elapsed seconds is the difference between a
+                    // pipeline that looks slow and one that looks broken.
+                    if (chunk.heartbeat !== undefined) {
+                        statusBadge.innerText = `WORKING ${chunk.heartbeat}s`;
+                        continue;
+                    }
+
+                    // LangGraph returns chunks like {"node_name": {"content": "..."}}
+                    // We need to unwrap the inner state update object
+                    let stateUpdate = chunk;
+                    // Every node returns the whole accumulated state, so each
+                    // chunk carries the research, the angle, the score and the
+                    // feedback of the nodes before it. Logged unconditionally,
+                    // one iteration printed the enforcer's verdict twice — once
+                    // when the writer's chunk carried it forward and once when
+                    // the enforcer restated it — with the writer's LLM call
+                    // between them. It reads exactly like two runs racing, and
+                    // was diagnosed as that more than once.
+                    const changed = (field, value) => {
+                        if (value === undefined || value === null) return false;
+                        const seen = JSON.stringify(value);
+                        if (lastLogged[field] === seen) return false;
+                        lastLogged[field] = seen;
+                        return true;
+                    };
+                    const keys = Object.keys(chunk);
+                    if (keys.length === 1 && typeof chunk[keys[0]] === 'object' && chunk[keys[0]] !== null) {
+                        stateUpdate = chunk[keys[0]];
+                    }
+
                     // Process graph execution states
-                    // Depending on what nodes are active in celery, log their info:
-                    if (chunk.research) {
-                        logConsole(`[Search Synthesis] Researched contexts: ${chunk.research.substring(0, 100)}...`);
+                    if (stateUpdate.research && changed('research', stateUpdate.research)) {
+                        renderResearch(stateUpdate.research);
+                        logConsole('[Researcher] Research gathered - see the Research panel');
                     }
-                    if (chunk.creative_angle) {
+                    if (stateUpdate.creative_angle && changed('creative_angle', stateUpdate.creative_angle)) {
                         statusBadge.innerText = 'Creating Angle';
-                        logConsole(`[Creative Director] Angle: ${chunk.creative_angle}`, 'highlight');
+                        logConsole(`[Creative Director] Angle: ${stateUpdate.creative_angle}`, 'highlight');
                     }
-                    if (chunk.status) {
-                        statusBadge.innerText = chunk.status.toUpperCase();
+                    if (stateUpdate.status) {
+                        statusBadge.innerText = stateUpdate.status.toUpperCase();
                     }
-                    if (chunk.score) {
-                        logConsole(`[Auditor Evaluator] Compliance Score: ${chunk.score} / 10`);
+                    if (stateUpdate.score && changed('score', stateUpdate.score)) {
+                        logConsole(`[Auditor Evaluator] Compliance Score: ${stateUpdate.score} / 10`);
                     }
-                    if (chunk.content) {
+                    if (typeof stateUpdate.approved === 'boolean') {
+                        lastApproved = stateUpdate.approved;
+                    }
+                    if (stateUpdate.content) {
                         // Render generated markdown/text to screen
-                        fullGeneratedText = chunk.content;
-                        renderedDiv.innerText = fullGeneratedText;
+                        fullGeneratedText = stateUpdate.content;
+                        try {
+                            if (typeof marked !== 'undefined' && typeof marked.parse === 'function') {
+                                renderedDiv.innerHTML = marked.parse(fullGeneratedText);
+                            } else if (typeof marked !== 'undefined' && typeof marked === 'function') {
+                                renderedDiv.innerHTML = marked(fullGeneratedText);
+                            } else {
+                                renderedDiv.innerText = fullGeneratedText;
+                            }
+                        } catch (renderErr) {
+                            logConsole(`Render error: ${renderErr.message}`, 'error');
+                            renderedDiv.innerText = fullGeneratedText;
+                        }
                         outputBox.classList.remove('hidden');
                         // Scroll to output
                         renderedDiv.scrollTop = renderedDiv.scrollHeight;
                     }
-                    if (chunk.feedback) {
-                        logConsole(`[Auditor Feedback] Revisions: ${chunk.feedback}`);
+                    if (stateUpdate.feedback && changed('feedback', stateUpdate.feedback)) {
+                        logConsole(`[Auditor Feedback] Revisions: ${stateUpdate.feedback}`);
                     }
                 } catch (jsonErr) {
                     // Raw logs or text line fallback
@@ -336,17 +540,26 @@ async function triggerGeneration(e) {
         }
 
         // Completion
-        statusBadge.innerText = 'Completed';
+        const auditPassed = lastApproved !== false;
+        statusBadge.innerText = auditPassed ? 'Completed' : 'Needs review';
         statusBadge.className = 'output-status';
-        logConsole('Content synthesis completed successfully!', 'success');
-        
+        if (auditPassed) {
+            logConsole('Content synthesis completed successfully!', 'success');
+        } else {
+            logConsole(
+                'Finished without the auditor approving it — the revision rounds ran out. ' +
+                'Read it before using it, and reject it with a reason to have it rewritten.',
+                'error'
+            );
+        }
+
         // Show human quality feedback form
         feedbackBox.classList.remove('hidden');
-        
+
         // Save to active session generations list for stats
         appState.sessionGenerationsCount++;
         document.getElementById('stat-generations-count').innerText = appState.sessionGenerationsCount;
-        
+
         // Push generation object to our history helper array
         const timestamp = new Date().toLocaleTimeString();
         appState.generations.unshift({
@@ -355,10 +568,10 @@ async function triggerGeneration(e) {
             contentType: contentType,
             time: timestamp,
             status: 'completed',
-            score: 'Pending human verification'
+            score: auditPassed ? 'Pending human verification' : 'Unapproved — needs review'
         });
         updateGenerationsListHTML();
-        
+
     } catch (err) {
         logConsole(`Error: ${err.message}`, 'error');
         statusBadge.innerText = 'Failed';
@@ -374,10 +587,10 @@ function logConsole(message, type = '') {
     const consoleDiv = document.getElementById('stream-console');
     const entry = document.createElement('div');
     entry.className = `console-log ${type}`;
-    
+
     const timestamp = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
     entry.innerHTML = `<span class="timestamp">[${timestamp}]</span> ${message}`;
-    
+
     consoleDiv.appendChild(entry);
     consoleDiv.scrollTop = consoleDiv.scrollHeight;
 }
@@ -401,18 +614,33 @@ function updateApproveBadge(checkbox) {
 
 async function submitFeedback(e) {
     e.preventDefault();
-    
-    const generationId = document.getElementById('feedback-generation-id').value;
-    const humanApproved = document.getElementById('feedback-human-approved').checked;
-    const humanScore = parseFloat(document.getElementById('feedback-human-score').value);
-    const humanFeedback = document.getElementById('feedback-comments').value;
-    const contentType = document.querySelector('input[name="content_type"]:checked').value;
-    
+
+    // Everything below is inside the try, including reading the form.
+    //
+    // It was not. A reviewer reported writing a rejection and getting no
+    // rewrite, and the server had no record of the request ever arriving —
+    // which is what a TypeError up here looks like from the outside: the
+    // handler dies before the fetch, the console has the reason, and the page
+    // says nothing at all. A submission that fails has to say so.
     const submitBtn = document.getElementById('btn-submit-feedback');
     submitBtn.disabled = true;
     submitBtn.querySelector('span').innerText = 'Committing feedback...';
 
     try {
+        const generationId = document.getElementById('feedback-generation-id').value;
+        const humanApproved = document.getElementById('feedback-human-approved').checked;
+        const humanScore = parseFloat(document.getElementById('feedback-human-score').value);
+        const humanFeedback = document.getElementById('feedback-comments').value;
+        const typeInput = document.querySelector('input[name="content_type"]:checked');
+        const contentType = typeInput ? typeInput.value : '';
+
+        if (!generationId) {
+            throw new Error('No generation is selected to review. Generate a piece first, or reopen it from History.');
+        }
+        if (!contentType) {
+            throw new Error('No content type is selected — pick one in the Content Generator panel.');
+        }
+
         const response = await fetch(`${API_BASE}/conversation/feedback`, {
             method: 'POST',
             headers: {
@@ -430,24 +658,51 @@ async function submitFeedback(e) {
         });
 
         if (!response.ok) {
-            throw new Error('Failed to register feedback');
+            // Carry the server's own words. "Failed to register feedback" hides
+            // a 403 on the wrong business, a 422 on a malformed score and a 500
+            // behind one sentence that says none of them.
+            let detail = '';
+            try {
+                const body = await response.json();
+                detail = body.detail ? ` — ${typeof body.detail === 'string' ? body.detail : JSON.stringify(body.detail)}` : '';
+            } catch (ignored) { /* a non-JSON error body is still an error */ }
+            throw new Error(`Feedback was not registered (HTTP ${response.status})${detail}`);
         }
 
-        showToast('Feedback submitted! Model alignment retrained.', 'success');
-        
+        // A rejection queues a full rewrite against the reason given. It always
+        // did; nothing said so, so a reviewer who rejected a draft with a
+        // detailed reason saw a success toast about retraining and concluded
+        // the system had ignored them. The rewrite arrives as its own
+        // generation, which is why this says where to look for it.
+        showToast(
+            humanApproved
+                ? 'Approved — saved to model memory.'
+                : 'Rejected. Rewriting against your reason now — the new draft appears in History when it lands.',
+            'success'
+        );
+
+        // Optional: offer to turn an approved script or ad into a video.
+        if (humanApproved && window.ytStudio && typeof window.ytStudio.offerVideo === 'function') {
+            const genRecord = appState.generations.find(g => g.id === generationId);
+            window.ytStudio.offerVideo(generationId, contentType, genRecord ? genRecord.topic : '');
+        }
+
         // Hide feedback container and clear comments
         document.getElementById('feedback-card-container').classList.add('hidden');
         document.getElementById('feedback-comments').value = '';
-        
+
         // Update status in history
         const genRecord = appState.generations.find(g => g.id === generationId);
         if (genRecord) {
             genRecord.score = `${humanScore}/10 (${humanApproved ? 'Approved' : 'Rejected'})`;
+            genRecord.note = humanApproved ? '' : 'Rewriting from your feedback…';
             updateGenerationsListHTML();
         }
-        
+
     } catch (err) {
         showToast(err.message, 'error');
+        logConsole(`Feedback failed: ${err.message}`, 'error');
+        console.error('submitFeedback', err);
     } finally {
         submitBtn.disabled = false;
         submitBtn.querySelector('span').innerText = 'Commit Feedback to Model Memory';
@@ -478,6 +733,23 @@ function clearSelectedFile() {
     document.getElementById('selected-file-badge').classList.add('hidden');
 }
 
+// The two kinds do different things, and the difference is worth stating at
+// the point of choosing rather than in documentation nobody opens.
+const DOC_KIND_HINTS = {
+    'brand-voice': 'Previously published work. Read whole into the Brand Brain to learn how this brand writes. Not indexed for retrieval.',
+    'product': 'Product sheets, press kits, fact sheets. Chunked into the RAG index as source facts. Held out of the Brand Brain.'
+};
+
+function bindDocKindHint() {
+    const hint = document.getElementById('upload-kind-hint');
+    if (!hint) return;
+    document.querySelectorAll('input[name="doc_kind"]').forEach(el => {
+        el.addEventListener('change', () => { hint.innerText = DOC_KIND_HINTS[el.value] || ''; });
+    });
+}
+
+document.addEventListener('DOMContentLoaded', bindDocKindHint);
+
 async function uploadDocument(e) {
     e.preventDefault();
     if (!appState.selectedFile) {
@@ -487,17 +759,22 @@ async function uploadDocument(e) {
 
     const contentType = document.getElementById('upload-content-type').value;
     const submitBtn = document.getElementById('btn-upload-submit');
-    
+    // 'brand-voice' or 'product' - the value is the endpoint segment, so the
+    // form posts to the path that performs the ingestion it names rather than
+    // to a shared endpoint carrying a role field.
+    const kindEl = document.querySelector('input[name="doc_kind"]:checked');
+    const docKind = kindEl ? kindEl.value : 'brand-voice';
+
     const formData = new FormData();
     formData.append('file', appState.selectedFile);
     formData.append('business_id', appState.user.business_id);
     formData.append('content_type', contentType);
-    
+
     submitBtn.disabled = true;
     submitBtn.querySelector('span').innerText = 'Processing & Vectorizing...';
 
     try {
-        const response = await fetch(`${API_BASE}/documents/documents/top-performing`, {
+        const response = await fetch(`${API_BASE}/documents/${docKind}`, {
             method: 'POST',
             headers: {
                 'Authorization': `Bearer ${appState.token}`
@@ -511,26 +788,29 @@ async function uploadDocument(e) {
         }
 
         const data = await response.json();
-        showToast('Document vectorized successfully!', 'success');
-        
-        // Add to mock session documents table
-        appState.sessionDocsCount++;
-        document.getElementById('stat-docs-count').innerText = appState.sessionDocsCount;
-        
-        appState.uploadedDocs.unshift({
-            filename: appState.selectedFile.name,
-            contentType: contentType,
-            date: new Date().toLocaleDateString(),
-            status: 'Processing (Vectorized)'
-        });
-        
-        updateUploadedDocsTableHTML();
+        showToast(docKind === 'product'
+            ? 'Product document indexed for retrieval'
+            : 'Brand voice document sent to the Brand Brain', 'success');
+
+        // The upload succeeded; the server is saying it looks like the wrong
+        // kind of document for the role it was given. Shown for longer than the
+        // success toast, because acting on it means deleting and re-uploading.
+        if (data.warning) {
+            showToast(data.warning, 'error');
+            logConsole(data.warning, 'error');
+        }
+
+        // Re-read the list from the server instead of appending a locally
+        // constructed row. The upload has already been persisted, so the server
+        // is the one place that knows the document's real id — which the delete
+        // button needs — and its real status.
         clearSelectedFile();
+        await loadUploadedDocsList();
     } catch (err) {
         showToast(err.message, 'error');
     } finally {
         submitBtn.disabled = false;
-        submitBtn.querySelector('span').innerText = 'Upload and Process Reference Document';
+        submitBtn.querySelector('span').innerText = 'Upload and Process Document';
     }
 }
 
@@ -538,7 +818,7 @@ async function uploadDocument(e) {
 
 async function loadMemoryPatterns(contentType) {
     // Switch active buttons state
-    ['blog', 'social', 'ad', 'proposal'].forEach(t => {
+    CONTENT_TYPES.forEach(t => {
         const btn = document.getElementById(`btn-memory-${t}`);
         if (btn) {
             btn.classList.remove('active');
@@ -549,7 +829,7 @@ async function loadMemoryPatterns(contentType) {
 
     const approvedList = document.getElementById('approved-patterns-list');
     const rejectedList = document.getElementById('rejected-patterns-list');
-    
+
     approvedList.innerHTML = '<div class="empty-state"><i class="fa-solid fa-spinner fa-spin"></i><p>Querying guidelines databases...</p></div>';
     rejectedList.innerHTML = '<div class="empty-state"><i class="fa-solid fa-spinner fa-spin"></i><p>Querying alignment metrics...</p></div>';
 
@@ -565,11 +845,11 @@ async function loadMemoryPatterns(contentType) {
         }
 
         const data = await response.json();
-        
+
         // Update counts in dashboard sidebar card
         const approvedPatterns = data.patterns?.approved || [];
         const rejectedPatterns = data.patterns?.rejected || [];
-        
+
         document.getElementById('display-approved-rules-count').innerText = `${approvedPatterns.length} rules active`;
 
         // Render Approved patterns
@@ -577,7 +857,7 @@ async function loadMemoryPatterns(contentType) {
             approvedList.innerHTML = `
                 <div class="empty-state">
                     <i class="fa-solid fa-shield-heart"></i>
-                    <p>No verified style guideposts synthesized for "${contentType.toUpperCase()}" outputs yet. Submit positive human score feedback to build memory rules.</p>
+                    <p>No verified style guideposts synthesized for "${escapeHTML(contentTypeLabel(contentType))}" outputs yet. Submit positive human score feedback to build memory rules.</p>
                 </div>`;
         } else {
             approvedList.innerHTML = approvedPatterns.map(p => `
@@ -593,7 +873,7 @@ async function loadMemoryPatterns(contentType) {
             rejectedList.innerHTML = `
                 <div class="empty-state">
                     <i class="fa-solid fa-ban"></i>
-                    <p>No rejection thresholds mapped for "${contentType.toUpperCase()}" outputs yet. Mark unsatisfactory content as rejected to define red-lines.</p>
+                    <p>No rejection thresholds mapped for "${escapeHTML(contentTypeLabel(contentType))}" outputs yet. Mark unsatisfactory content as rejected to define red-lines.</p>
                 </div>`;
         } else {
             rejectedList.innerHTML = rejectedPatterns.map(p => `
@@ -629,10 +909,11 @@ function updateGenerationsListHTML() {
     container.innerHTML = appState.generations.map(gen => `
         <div class="history-item">
             <div class="history-info">
-                <div class="title">${gen.topic}</div>
+                <div class="title">${escapeHTML(gen.topic)}</div>
                 <div class="meta">
-                    <span><i class="fa-solid fa-layer-group"></i> ${gen.contentType.toUpperCase()}</span>
-                    <span><i class="fa-regular fa-id-card"></i> ${gen.id.substring(0,8)}...</span>
+                    <span><i class="fa-solid fa-layer-group"></i> ${escapeHTML(contentTypeLabel(gen.contentType))}</span>
+                    <span><i class="fa-regular fa-id-card"></i> ${gen.id.substring(0, 8)}...</span>
+                    ${gen.note ? `<span><i class="fa-solid fa-rotate"></i> ${escapeHTML(gen.note)}</span>` : ''}
                 </div>
             </div>
             <div class="history-score">
@@ -645,10 +926,17 @@ function updateGenerationsListHTML() {
 
 function updateUploadedDocsTableHTML() {
     const tableBody = document.getElementById('table-documents-body');
+
+    // Kept here so the dashboard tile can never disagree with the table —
+    // both are driven by the same server response.
+    appState.sessionDocsCount = appState.uploadedDocs.length;
+    const countTile = document.getElementById('stat-docs-count');
+    if (countTile) countTile.innerText = appState.sessionDocsCount;
+
     if (appState.uploadedDocs.length === 0) {
         tableBody.innerHTML = `
             <tr>
-                <td colspan="4" class="table-empty">
+                <td colspan="5" class="table-empty">
                     <i class="fa-regular fa-folder"></i>
                     <p>No guideline documents vectorized yet. Use the upload card to sync brand guidelines.</p>
                 </td>
@@ -658,12 +946,163 @@ function updateUploadedDocsTableHTML() {
 
     tableBody.innerHTML = appState.uploadedDocs.map(doc => `
         <tr>
-            <td><strong>${doc.filename}</strong></td>
-            <td><span class="badge badge-accent">${doc.contentType.toUpperCase()}</span></td>
-            <td>${doc.date}</td>
-            <td><span class="score-badge">${doc.status}</span></td>
+            <td><strong>${escapeHTML(doc.filename)}</strong></td>
+            <td><span class="badge badge-accent">${escapeHTML(contentTypeLabel(doc.content_type))}</span></td>
+            <td><span class="badge badge-neutral">${doc.doc_role === 'reference' ? 'Reference' : 'Voice'}</span></td>
+            <td>${formatDocDate(doc.uploaded_at)}</td>
+            <td class="doc-actions">
+                ${renderDocStatus(doc)}
+                <button class="btn btn-sm btn-danger"
+                        onclick="handleDeleteDocument(${doc.id}, this)"
+                        title="Delete this document and everything derived from it">
+                    <i class="fa-regular fa-trash-can"></i>
+                </button>
+            </td>
         </tr>
     `).join('');
+}
+
+// A document's status badge. The two roles are processed by different tasks and
+// end up in different places, so the badge says which happened rather than a
+// bare "completed": a voice document is extracted into the Brand Brain, a
+// reference document is indexed for retrieval.
+function renderDocStatus(doc) {
+    const status = (doc.status || 'pending').toLowerCase();
+    const isReference = doc.doc_role === 'reference';
+
+    if (status === 'completed') {
+        const label = isReference ? 'Indexed' : 'In Brand Brain';
+        const title = isReference
+            ? 'Indexed for retrieval — available to the researcher as source material'
+            : 'Extracted into the Brand Brain — shaping the voice of new content';
+        return `<span class="doc-status is-done" title="${escapeHTML(title)}">
+                    <i class="fa-solid fa-circle-check"></i> ${label}
+                </span>`;
+    }
+
+    if (status === 'failed') {
+        const why = doc.error_message
+            ? `Processing failed: ${doc.error_message}`
+            : 'Processing failed. Delete the document and upload it again.';
+        return `<span class="doc-status is-failed" title="${escapeHTML(why)}">
+                    <i class="fa-solid fa-circle-exclamation"></i> Failed
+                </span>`;
+    }
+
+    return `<span class="doc-status is-pending"
+                  title="Queued — this document is being processed">
+                <i class="fa-solid fa-spinner fa-spin"></i> Processing
+            </span>`;
+}
+
+// Filenames come from user uploads, so they reach this table as untrusted
+// text. Interpolating them into innerHTML without escaping would let a file
+// named with a <script> tag run in the next viewer's session.
+function escapeHTML(value) {
+    const div = document.createElement('div');
+    div.textContent = value == null ? '' : String(value);
+    return div.innerHTML;
+}
+
+function formatDocDate(iso) {
+    if (!iso) return '—';
+    const d = new Date(iso);
+    if (isNaN(d)) return '—';
+    return d.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
+}
+
+async function handleDeleteDocument(documentId, btn) {
+    const confirmed = confirm(
+        'Delete this document?\n\n' +
+        'Its embeddings are removed and the brand voice profile is rebuilt ' +
+        'from the documents that remain. This cannot be undone.'
+    );
+    if (!confirmed) return;
+
+    if (btn) {
+        btn.disabled = true;
+        btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i>';
+    }
+
+    try {
+        const response = await fetch(`${API_BASE}/documents/${documentId}`, {
+            method: 'DELETE',
+            headers: { 'Authorization': `Bearer ${appState.token}` }
+        });
+
+        if (!response.ok) {
+            const err = await response.json().catch(() => ({}));
+            throw new Error(err.detail || 'Failed to delete document');
+        }
+
+        const data = await response.json();
+        let message = 'Document deleted';
+        if (data.brand_brain_deleted) {
+            // Nothing is left to derive a voice from, so say the Brain is gone
+            // rather than implying a rebuild the user will look for and not find.
+            message = 'Document deleted — that was the last one, so the Brand Brain is cleared';
+        } else if (data.brand_brain_resynthesizing) {
+            message = 'Document deleted — rebuilding the Brand Brain from the rest';
+        }
+        showToast(message, 'success');
+        await loadUploadedDocsList();
+    } catch (err) {
+        showToast(err.message, 'error');
+        if (btn) {
+            btn.disabled = false;
+            btn.innerHTML = '<i class="fa-regular fa-trash-can"></i>';
+        }
+    }
+}
+
+async function handleResetBrandBrain() {
+    const select = document.getElementById('reset-content-type');
+    const contentType = select.value;
+    // The visible label ("Press Release Model") is what the user chose; the
+    // value ("press_release") is an internal key and would read as a different thing.
+    const label = select.options[select.selectedIndex].text;
+
+    // Two steps on purpose: this discards every document and the learned voice
+    // profile for a content type, and there is no undo.
+    const typed = prompt(
+        `This deletes every document you have uploaded to the ${label}, ` +
+        `their embeddings, and the voice profile learned from them.\n\n` +
+        `Your other models are untouched.\n\n` +
+        `Type RESET to confirm.`
+    );
+    if (typed !== 'RESET') {
+        if (typed !== null) showToast('Reset cancelled', 'info');
+        return;
+    }
+
+    const btn = document.getElementById('btn-reset-brain');
+    btn.disabled = true;
+    const original = btn.innerHTML;
+    btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> <span>Clearing…</span>';
+
+    try {
+        const response = await fetch(`${API_BASE}/documents/brand-brain/${contentType}`, {
+            method: 'DELETE',
+            headers: { 'Authorization': `Bearer ${appState.token}` }
+        });
+
+        if (!response.ok) {
+            const err = await response.json().catch(() => ({}));
+            throw new Error(err.detail || 'Failed to reset brand brain');
+        }
+
+        const data = await response.json();
+        showToast(
+            `${label} cleared — ${data.documents_deleted} document(s) removed`,
+            'success'
+        );
+        await loadUploadedDocsList();
+    } catch (err) {
+        showToast(err.message, 'error');
+    } finally {
+        btn.disabled = false;
+        btn.innerHTML = original;
+    }
 }
 
 function loadRecentGenerations() {
@@ -671,9 +1110,63 @@ function loadRecentGenerations() {
     updateGenerationsListHTML();
 }
 
-function loadUploadedDocsList() {
-    appState.uploadedDocs = [];
+// Reads from the server rather than from browser memory. The previous version
+// just emptied the local array, so the table was blank on every reload and a
+// user could not see — let alone remove — what an earlier session uploaded.
+async function loadUploadedDocsList() {
+    try {
+        const response = await fetch(`${API_BASE}/documents`, {
+            headers: { 'Authorization': `Bearer ${appState.token}` }
+        });
+        if (!response.ok) throw new Error('Could not load documents');
+        appState.uploadedDocs = await response.json();
+    } catch (err) {
+        appState.uploadedDocs = [];
+        showToast(err.message, 'error');
+    }
     updateUploadedDocsTableHTML();
+    scheduleDocStatusPoll();
+}
+
+// Extraction happens in a Celery worker, so a document is still 'pending' when
+// the list is re-read straight after uploading it. Without this the badge sat on
+// "Processing" until the user thought to reload the page, which is the same
+// problem as never setting the status at all.
+//
+// Polls only while something is actually pending, and stops on its own so an
+// idle tab is not asking the API for a change that will never come.
+const DOC_POLL_INTERVAL_MS = 3000;
+const DOC_POLL_TIMEOUT_MS = 180000;
+let docPollTimer = null;
+let docPollStartedAt = null;
+
+function scheduleDocStatusPoll() {
+    if (docPollTimer) {
+        clearTimeout(docPollTimer);
+        docPollTimer = null;
+    }
+
+    const pending = (appState.uploadedDocs || []).some(
+        d => (d.status || 'pending').toLowerCase() === 'pending'
+    );
+    if (!pending) {
+        docPollStartedAt = null;
+        return;
+    }
+
+    if (docPollStartedAt === null) {
+        docPollStartedAt = Date.now();
+    } else if (Date.now() - docPollStartedAt > DOC_POLL_TIMEOUT_MS) {
+        // Give up rather than poll forever. The document may genuinely still be
+        // queued behind others; a reload will pick up whatever it settled on.
+        docPollStartedAt = null;
+        return;
+    }
+
+    docPollTimer = setTimeout(() => {
+        docPollTimer = null;
+        if (appState.token) loadUploadedDocsList();
+    }, DOC_POLL_INTERVAL_MS);
 }
 
 // --- UTILITY CLIENT-SIDE HELPERS ---
@@ -682,18 +1175,18 @@ function showToast(message, type = 'info') {
     const container = document.getElementById('toast-container');
     const toast = document.createElement('div');
     toast.className = `toast ${type}`;
-    
+
     let icon = 'fa-circle-info';
     if (type === 'success') icon = 'fa-circle-check';
     if (type === 'error') icon = 'fa-circle-exclamation';
-    
+
     toast.innerHTML = `
         <i class="fa-solid ${icon}"></i>
         <span>${message}</span>
     `;
-    
+
     container.appendChild(toast);
-    
+
     // Auto-remove toast after 4s
     setTimeout(() => {
         toast.style.opacity = '0';

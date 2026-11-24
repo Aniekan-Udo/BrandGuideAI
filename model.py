@@ -1,249 +1,583 @@
-from abc import ABC, abstractmethod
-from typing import Dict, Any
+"""Chat models for every LLM call in the pipeline.
+
+Plug-and-adapter design:
+
+    LLMProvider       the abstract adapter every provider implements
+    VertexAIProvider  Gemini on Google Cloud Vertex AI  (ChatVertexAI)
+    GroqProvider      models served by Groq             (ChatGroq)
+    ClaudeProvider    Anthropic's Claude models         (ChatAnthropic)
+    OpenAICompatibleProvider
+                      OpenAI, or any OpenAI-compatible API: OpenRouter,
+                      DeepSeek, Together, Ollama        (ChatOpenAI)
+    GeminiAPIProvider Gemini on a Google AI Studio key  (ChatOpenAI)
+    LLMSingleton      picks the adapter for each task mode (LLM_PROVIDER, or
+                      LLM_PROVIDER_<MODE> for one mode) and hands out one
+                      chat model per mode
+
+Nodes only ever call ``LLMSingleton.get(mode).invoke(prompt)``. Adding a
+provider means writing one LLMProvider subclass and registering it in
+LLMSingleton.PROVIDERS — nothing else changes.
+"""
+from __future__ import annotations
+
+import logging
 import os
-from config import model
-class LLMModel(ABC):
-    @property
-    @abstractmethod
-    def source(self) -> str: ...
-    
-    @property
-    @abstractmethod
-    def model(self) -> str: ...
-    
-    @property
-    @abstractmethod
-    def api_key(self) -> str: ...
-    
-    @property
-    @abstractmethod
-    def temperature(self) -> float: ...
-    
-    @property
-    @abstractmethod
-    def max_tokens(self) -> int: ...
-    
-    @property
-    @abstractmethod
-    def top_p(self) -> float: ...
-    
-    @abstractmethod
-    def to_params(self) -> Dict[str, Any]: ...
-    
-    @abstractmethod
-    def to_langchain(self): ...
+import re
+import threading
+from abc import ABC, abstractmethod
+from typing import Any, Dict
+
+from utils.llm_output import message_text
+
+logger = logging.getLogger(__name__)
+
+# How long a cached prompt->response pair is served before the next identical
+# call pays for a fresh model invocation. 24h matches the Brand Brain cache TTL
+# in brand_metrics.py.
+LLM_CACHE_TTL_SECONDS = 86400
 
 
-class ChatGroq(LLMModel):
-    def __init__(
-        self,
-        model: str = model,
-        api_key: str = "",
-        temperature: float = 0.7,
-        max_tokens: int = 8192,
-        top_p: float = 1.0
-    ):
-        if not api_key.strip():
-            raise ValueError("Groq API key required")
-        if not 0 <= temperature <= 2:
-            raise ValueError("temperature must be 0-2")
-        if not 0 < top_p <= 1:
-            raise ValueError("top_p must be (0,1]")
-        if not (1 <= max_tokens <= 131072):
-            raise ValueError("max_tokens must be 1-131072")
-        
-        self._model = model
-        self._api_key = api_key
-        self._temperature = temperature
-        self._max_tokens = max_tokens
-        self._top_p = top_p
-
-    @property
-    def source(self) -> str:
-        return "ChatGroq"
-
-    @property
-    def model(self) -> str:
-        return self._model
-
-    @property
-    def api_key(self) -> str:
-        return self._api_key
-
-    @property
-    def temperature(self) -> float:
-        return self._temperature
-
-    @property
-    def max_tokens(self) -> int:
-        return self._max_tokens
-
-    @property
-    def top_p(self) -> float:
-        return self._top_p
-
-    def to_params(self) -> Dict[str, Any]:
-        """API-ready params (excludes api_key for security)."""
-        return {
-            "model": self.model,
-            "temperature": self.temperature,
-            "max_tokens": self.max_tokens,
-            "top_p": self.top_p
-        }
-
-    def to_langchain(self):
-        from langchain_groq import ChatGroq as LangChainGroq
-        return LangChainGroq(
-            model=self._model,
-            api_key=self._api_key,
-            temperature=self._temperature,
-            max_tokens=self._max_tokens
-        )
-
-    def __repr__(self) -> str:
-        return f"ChatGroq(model='{self.model}', temp={self.temperature})"
-    
+def _env(name: str) -> str:
+    return os.getenv(name, "").strip()
 
 
-# OpenAI class
-class ChatOpenAI(LLMModel):
-    def __init__(
-        self,
-        model: str = "gpt-4o",
-        api_key: str = "",
-        temperature: float = 0.7,
-        max_tokens: int = 4096,
-        top_p: float = 1.0
-    ):
-        if not api_key.strip():
-            raise ValueError("OpenAI API key required")
-        if not 0 <= temperature <= 2:
-            raise ValueError("temperature must be 0-2")
-        if not 0 < top_p <= 1:
-            raise ValueError("top_p must be (0,1]")
-        if not (1 <= max_tokens <= 128000):
-            raise ValueError("max_tokens must be 1-128000")
-
-        self._model = model
-        self._api_key = api_key
-        self._temperature = temperature
-        self._max_tokens = max_tokens
-        self._top_p = top_p
-
-    @property
-    def source(self) -> str:
-        return "ChatOpenAI"
-
-    @property
-    def model(self) -> str:
-        return self._model
-
-    @property
-    def api_key(self) -> str:
-        return self._api_key
-
-    @property
-    def temperature(self) -> float:
-        return self._temperature
-
-    @property
-    def max_tokens(self) -> int:
-        return self._max_tokens
-
-    @property
-    def top_p(self) -> float:
-        return self._top_p
-
-    def to_params(self) -> Dict[str, Any]:
-        """API-ready params (excludes api_key for security)."""
-        return {
-            "model": self.model,
-            "temperature": self.temperature,
-            "max_tokens": self.max_tokens,
-            "top_p": self.top_p
-        }
-
-    def to_langchain(self):
-        from langchain_openai import ChatOpenAI as LangChainOpenAI
-        return LangChainOpenAI(
-            model=self._model,
-            api_key=self._api_key,
-            temperature=self._temperature,
-            max_tokens=self._max_tokens
-        )
-
-    def __repr__(self) -> str:
-        return f"ChatOpenAI(model='{self.model}', temp={self.temperature})"
+def _env_int(name: str, default: int) -> int:
+    value = _env(name)
+    return int(value) if value else default
 
 
+# A single silently-hanging call is a pipeline-killer, not just slow, so every
+# mode gets an explicit, bounded timeout and a small retry count.
+DEFAULT_LLM_TIMEOUT_SECONDS = _env_int("LLM_REQUEST_TIMEOUT_SECONDS", 60)
+DEFAULT_LLM_MAX_RETRIES = _env_int("LLM_MAX_RETRIES", 2)
+# Synthesis writes the whole Brand Brain and legitimately takes longer.
+SYNTHESIS_LLM_TIMEOUT_SECONDS = _env_int("LLM_SYNTHESIS_TIMEOUT_SECONDS", 90)
 
-class ChatOllama(LLMModel):
-    def __init__(
-        self,
-        model: str = "mistral:7b",
-        base_url: str = "http://localhost:11434",
-        temperature: float = 0.7,
-        max_tokens: int = 8192,
-        top_p: float = 1.0
-    ):
-        self._model = model
-        self._base_url = base_url
-        self._temperature = temperature
-        self._max_tokens = max_tokens
-        self._top_p = top_p
 
-    @property
-    def source(self) -> str:
-        return "ChatOllama"
-
-    @property
-    def model(self) -> str:
-        return self._model
-
-    @property
-    def api_key(self) -> str:
-        return ""
-
-    @property
-    def temperature(self) -> float:
-        return self._temperature
-
-    @property
-    def max_tokens(self) -> int:
-        return self._max_tokens
-
-    @property
-    def top_p(self) -> float:
-        return self._top_p
-
-    def to_params(self):
-        return {
-            "model": self.model,
-            "temperature": self.temperature,
-            "max_tokens": self.max_tokens,
-        }
-
-    def to_langchain(self):
-        from langchain_ollama import ChatOllama as LangChainOllama
-        return LangChainOllama(
-            model=self._model,
-            base_url=self._base_url,
-            temperature=self._temperature,
-            num_predict=self._max_tokens
-        )
-
-    def __repr__(self) -> str:
-        return f"ChatOllama(model='{self.model}', temp={self.temperature})"
-
-# Singleton for LLMs
-class LLMSingleton:
-    _instance = None
+# ---------------------------------------------------------------------------
+#  Token telemetry
+# ---------------------------------------------------------------------------
+# Accumulated per process and reset per generation by celery_task, so each run
+# can report what it cost. `cached` is the number of input tokens the provider
+# served from its prompt cache, where the provider reports it.
+class TokenUsage:
+    _lock = threading.Lock()
+    calls = 0
+    prompt_tokens = 0
+    output_tokens = 0
+    cached_tokens = 0
 
     @classmethod
-    def get(cls, mode: str = "generation"):
-        if cls._instance is None:
-            cls._instance = ChatGroq(
-                model="llama-3.3-70b-versatile",
-                api_key=os.getenv("GROQ_API_KEY", "")
-            ).to_langchain()
-        return cls._instance
+    def record(cls, prompt=0, output=0, cached=0):
+        with cls._lock:
+            cls.calls += 1
+            cls.prompt_tokens += prompt
+            cls.output_tokens += output
+            cls.cached_tokens += cached
+
+    @classmethod
+    def snapshot(cls) -> Dict[str, Any]:
+        with cls._lock:
+            hit_rate = (cls.cached_tokens / cls.prompt_tokens) if cls.prompt_tokens else 0.0
+            return {
+                "calls": cls.calls,
+                "prompt_tokens": cls.prompt_tokens,
+                "output_tokens": cls.output_tokens,
+                "cached_tokens": cls.cached_tokens,
+                "cache_hit_rate": round(hit_rate, 4),
+            }
+
+    @classmethod
+    def reset(cls):
+        with cls._lock:
+            cls.calls = cls.prompt_tokens = cls.output_tokens = cls.cached_tokens = 0
+
+
+def _extract_usage(message) -> tuple:
+    """(prompt, output, cached) token counts from a LangChain message.
+
+    LangChain normalises usage onto message.usage_metadata for every provider.
+    """
+    usage = getattr(message, "usage_metadata", None)
+    if not isinstance(usage, dict):
+        return 0, 0, 0
+    details = usage.get("input_token_details") or {}
+    cached = details.get("cache_read", 0) if isinstance(details, dict) else 0
+    return int(usage.get("input_tokens") or 0), int(usage.get("output_tokens") or 0), int(cached or 0)
+
+
+def _make_token_callback(model_name: str):
+    """A callback handler that records token usage for every completed call.
+
+    A LangChain callback rather than a wrapper around .invoke(): it is the
+    supported extension point and also sees streaming and batched calls.
+    """
+    from langchain_core.callbacks import BaseCallbackHandler
+
+    class _TokenCallback(BaseCallbackHandler):
+        def on_llm_end(self, response, **kwargs):
+            try:
+                for gen_list in getattr(response, "generations", []) or []:
+                    for gen in gen_list:
+                        msg = getattr(gen, "message", None)
+                        if msg is None:
+                            continue
+                        prompt, output, cached = _extract_usage(msg)
+                        if prompt or output:
+                            TokenUsage.record(prompt, output, cached)
+                            logger.info(
+                                "LLM usage model=%s prompt=%d output=%d cached=%d",
+                                model_name, prompt, output, cached,
+                            )
+                            return
+            except Exception as e:  # telemetry must never break a generation
+                logger.debug("Token telemetry unavailable: %s", e)
+
+    return _TokenCallback()
+
+
+# ---------------------------------------------------------------------------
+#  Provider adapters
+# ---------------------------------------------------------------------------
+class LLMProvider(ABC):
+    """Adapter between the pipeline and one LLM provider's LangChain chat model.
+
+    Subclasses declare their name, default model and required credentials, and
+    implement to_langchain(). Everything provider-specific lives in the
+    subclass; LLMSingleton only ever talks to this interface.
+    """
+
+    #: Value of LLM_PROVIDER that selects this adapter.
+    name: str = ""
+    #: Model used when LLM_MODEL is not set.
+    default_model: str = ""
+    #: Environment variables that must be set before this provider can run.
+    required_env: tuple[str, ...] = ()
+
+    def __init__(
+        self,
+        model: str | None = None,
+        temperature: float = 0.7,
+        max_tokens: int = 8192,
+        timeout: int = DEFAULT_LLM_TIMEOUT_SECONDS,
+        max_retries: int = DEFAULT_LLM_MAX_RETRIES,
+    ):
+        self._model = model or self.default_model
+        self._temperature = temperature
+        self._max_tokens = max_tokens
+        self._timeout = timeout
+        self._max_retries = max_retries
+
+    @property
+    def model(self) -> str:
+        return self._model
+
+    @property
+    def temperature(self) -> float | None:
+        """The temperature to send, or None when the model rejects one."""
+        return self._temperature if self.supports_temperature() else None
+
+    @property
+    def max_tokens(self) -> int:
+        return self._max_tokens
+
+    @property
+    def timeout(self) -> int:
+        return self._timeout
+
+    @property
+    def max_retries(self) -> int:
+        return self._max_retries
+
+    def supports_temperature(self) -> bool:
+        """Whether this model accepts a temperature parameter. Override per provider."""
+        return True
+
+    @classmethod
+    def missing_env(cls) -> list[str]:
+        """Required credentials that are not set, for the startup check."""
+        return [var for var in cls.required_env if not _env(var)]
+
+    @abstractmethod
+    def to_langchain(self, callbacks: list | None = None):
+        """Return the configured LangChain chat model."""
+        ...
+
+    def __repr__(self) -> str:
+        return f"{type(self).__name__}(model={self.model!r}, temperature={self.temperature})"
+
+
+class VertexAIProvider(LLMProvider):
+    """Gemini on Google Cloud Vertex AI.
+
+    Authenticates with Application Default Credentials (a service account on
+    the host, or a key file named by GOOGLE_APPLICATION_CREDENTIALS) and bills
+    to the Cloud project in PROJECT_ID.
+    """
+
+    name = "vertex_ai"
+    default_model = "gemini-2.5-flash"
+    required_env = ("PROJECT_ID",)
+
+    def __init__(self, model: str | None = None, **kwargs):
+        # GEMINI_MODEL predates LLM_MODEL and is still honoured.
+        super().__init__(model=model or _env("GEMINI_MODEL") or None, **kwargs)
+
+    def to_langchain(self, callbacks: list | None = None):
+        from langchain_google_vertexai import ChatVertexAI
+
+        return ChatVertexAI(
+            model=self.model,
+            project=_env("PROJECT_ID"),
+            location=_env("LOCATION") or "us-central1",
+            temperature=self.temperature,
+            max_output_tokens=self.max_tokens,
+            max_retries=self.max_retries,
+            callbacks=callbacks or [],
+        )
+
+
+class GroqProvider(LLMProvider):
+    """Open models served on Groq's inference API (GROQ_API_KEY)."""
+
+    name = "groq"
+    default_model = "llama-3.3-70b-versatile"
+    required_env = ("GROQ_API_KEY",)
+
+    def to_langchain(self, callbacks: list | None = None):
+        from langchain_groq import ChatGroq
+
+        return ChatGroq(
+            model=self.model,
+            temperature=self.temperature,
+            max_tokens=self.max_tokens,
+            timeout=self.timeout,
+            max_retries=self.max_retries,
+            callbacks=callbacks or [],
+        )
+
+
+class ClaudeProvider(LLMProvider):
+    """Anthropic's Claude models (ANTHROPIC_API_KEY)."""
+
+    name = "claude"
+    default_model = "claude-opus-5-5"
+    required_env = ("ANTHROPIC_API_KEY",)
+
+    # Claude Opus 4.7+, Sonnet 5+, Haiku 5+ and Fable/Mythos reject sampling
+    # parameters with a 400, so temperature is left unset for them.
+    _NO_TEMPERATURE = re.compile(r"opus-(4-[7-9]|[5-9])|sonnet-[5-9]|haiku-[5-9]|fable|mythos")
+
+    def supports_temperature(self) -> bool:
+        return not self._NO_TEMPERATURE.search(self.model.lower())
+
+    def to_langchain(self, callbacks: list | None = None):
+        from langchain_anthropic import ChatAnthropic
+
+        return ChatAnthropic(
+            model=self.model,
+            temperature=self.temperature,
+            max_tokens=self.max_tokens,
+            timeout=self.timeout,
+            max_retries=self.max_retries,
+            callbacks=callbacks or [],
+        )
+
+
+class OpenAICompatibleProvider(LLMProvider):
+    """OpenAI, or any API that speaks OpenAI's chat-completions protocol.
+
+    OPENAI_BASE_URL points it somewhere other than OpenAI, which covers most
+    hosted and local models without a new adapter:
+
+        OpenRouter   https://openrouter.ai/api/v1
+        DeepSeek     https://api.deepseek.com
+        Together     https://api.together.xyz/v1
+        Ollama       http://localhost:11434/v1   (any non-empty OPENAI_API_KEY)
+    """
+
+    name = "openai"
+    default_model = "gpt-5"
+    required_env = ("OPENAI_API_KEY",)
+    #: Where requests go when OPENAI_BASE_URL is unset. None means OpenAI itself.
+    default_base_url: str | None = None
+    #: Variable holding the key and the base-URL override, so each preset can
+    #: run alongside the others with its own credentials.
+    key_env = "OPENAI_API_KEY"
+    base_url_env = "OPENAI_BASE_URL"
+
+    # OpenAI's reasoning models accept only the default temperature.
+    _NO_TEMPERATURE = re.compile(r"(^|/)(o\d|gpt-5)")
+
+    def supports_temperature(self) -> bool:
+        return not self._NO_TEMPERATURE.search(self.model.lower())
+
+    def base_url(self) -> str | None:
+        return _env(self.base_url_env) or self.default_base_url
+
+    def to_langchain(self, callbacks: list | None = None):
+        from langchain_openai import ChatOpenAI
+
+        return ChatOpenAI(
+            model=self.model,
+            api_key=_env(self.key_env),
+            base_url=self.base_url(),
+            temperature=self.temperature,
+            max_tokens=self.max_tokens,
+            timeout=self.timeout,
+            max_retries=self.max_retries,
+            callbacks=callbacks or [],
+        )
+
+
+class GeminiAPIProvider(OpenAICompatibleProvider):
+    """Gemini through Google AI Studio's API key (GEMINI_API_KEY).
+
+    Unlike vertex_ai it needs no Cloud project or billing account, and AI
+    Studio keys come with a free tier, rate-limited.
+    """
+
+    name = "gemini"
+    default_model = "gemini-2.5-flash"
+    required_env = ("GEMINI_API_KEY",)
+    default_base_url = "https://generativelanguage.googleapis.com/v1beta/openai/"
+    key_env = "GEMINI_API_KEY"
+    base_url_env = "GEMINI_BASE_URL"
+
+    def supports_temperature(self) -> bool:
+        return True
+
+
+# ---------------------------------------------------------------------------
+#  Model handle
+# ---------------------------------------------------------------------------
+class ChatModelHandle:
+    """A chat model whose responses always carry plain-text content.
+
+    Callers read ``.invoke(prompt).content`` as a string. Claude models with
+    thinking on return a list of content blocks instead, so the content is
+    flattened to its text here, once, for every provider.
+    """
+
+    def __init__(self, llm, provider: LLMProvider):
+        self._llm = llm
+        self.provider = provider
+
+    @staticmethod
+    def _as_text(message):
+        text = message_text(message.content)
+        if text != message.content:
+            message = message.model_copy(update={"content": text})
+        return message
+
+    def invoke(self, input, config=None, **kwargs):
+        return self._as_text(self._llm.invoke(input, config=config, **kwargs))
+
+    async def ainvoke(self, input, config=None, **kwargs):
+        return self._as_text(await self._llm.ainvoke(input, config=config, **kwargs))
+
+    def __getattr__(self, name):
+        return getattr(self._llm, name)
+
+    def __repr__(self) -> str:
+        return f"ChatModelHandle({self.provider!r})"
+
+
+# ---------------------------------------------------------------------------
+#  Singleton — the provider switch
+# ---------------------------------------------------------------------------
+class LLMSingleton:
+    """Selects the provider adapter and hands out one chat model per task mode.
+
+        LLM_PROVIDER         vertex_ai (default) | groq | claude | openai | gemini
+        LLM_MODEL            optional; the adapter's default model otherwise
+        LLM_PROVIDER_<MODE>  optional; runs one task mode on another provider
+        LLM_MODEL_<MODE>     optional; overrides LLM_MODEL for one task mode
+        LLM_TIMEOUT_<MODE>   optional; per-attempt timeout in seconds for one mode
+
+    Modes are EXTRACTION, ENFORCEMENT, SYNTHESIS and GENERATION. A mode moved
+    to another provider does not inherit LLM_MODEL, which names a model of the
+    shared provider: it takes LLM_MODEL_<MODE>, or that adapter's default.
+
+    So a free model can do the high-volume extraction while a frontier model
+    writes and a model from a different family judges:
+
+        LLM_PROVIDER=groq
+        LLM_PROVIDER_GENERATION=claude
+        LLM_PROVIDER_SYNTHESIS=claude
+        LLM_PROVIDER_ENFORCEMENT=gemini
+        LLM_MODEL_ENFORCEMENT=gemini-2.5-pro
+    """
+
+    # The plug board. Register a new LLMProvider subclass here to add a provider.
+    PROVIDERS: dict[str, type[LLMProvider]] = {
+        VertexAIProvider.name: VertexAIProvider,
+        GroqProvider.name: GroqProvider,
+        ClaudeProvider.name: ClaudeProvider,
+        OpenAICompatibleProvider.name: OpenAICompatibleProvider,
+        GeminiAPIProvider.name: GeminiAPIProvider,
+    }
+    ALIASES = {
+        "vertex": "vertex_ai",
+        "google_vertexai": "vertex_ai",
+        "anthropic": "claude",
+        "openai_compatible": "openai",
+        "google_ai_studio": "gemini",
+        "gemini_api": "gemini",
+    }
+    DEFAULT_PROVIDER = VertexAIProvider.name
+
+    # extraction/enforcement: low for reliable structured JSON
+    # synthesis: moderate for analytical reasoning
+    # generation: higher for creative writing
+    MODE_TEMPERATURES = {
+        "extraction":  0.1,
+        "enforcement": 0.1,
+        "synthesis":   0.3,
+        "generation":  0.7,
+    }
+
+    # Synthesis needs much more headroom to write the full Brand Brain without
+    # truncation. LLM_MAX_TOKENS_<MODE> lowers a cap for models with a smaller
+    # output limit.
+    MODE_MAX_TOKENS = {
+        "extraction":  8192,
+        "enforcement": 8192,
+        "synthesis":   32768,
+        "generation":  8192,
+    }
+
+    # Model per mode. Temperature, token ceiling and timeout have always been
+    # tuned per mode; the model itself was not, so making the judge stronger
+    # meant making per-document extraction stronger too — the highest-volume,
+    # most mechanical call in the system, and the one least helped by it.
+    #
+    # Which modes are worth the stronger model is a judgement about where model
+    # quality shows. Enforcement decides whether a draft sounds like the brand,
+    # and synthesis writes the Brand Brain every later step reads; both are read
+    # by a person eventually. Extraction turns one document into structured
+    # fields and is checked in code afterwards.
+    #
+    # Empty by default: a deployment that sets nothing keeps the single model it
+    # has today, and the bill it has today.
+    MODE_MODELS: dict[str, str] = {}
+
+    MODE_TIMEOUTS = {
+        "extraction":  DEFAULT_LLM_TIMEOUT_SECONDS,
+        "enforcement": DEFAULT_LLM_TIMEOUT_SECONDS,
+        "synthesis":   SYNTHESIS_LLM_TIMEOUT_SECONDS,
+        "generation":  DEFAULT_LLM_TIMEOUT_SECONDS,
+    }
+
+    _instances: dict = {}
+    _lock = threading.Lock()
+    _cache_initialized = False
+
+    @classmethod
+    def _resolve(cls, var: str, raw: str) -> str:
+        name = cls.ALIASES.get(raw, raw)
+        if name not in cls.PROVIDERS:
+            raise ValueError(
+                f"{var} must be one of {sorted(cls.PROVIDERS)}, got {raw!r}"
+            )
+        return name
+
+    @classmethod
+    def provider_name(cls, mode: str | None = None) -> str:
+        """The registered provider for one task mode, or the shared one.
+
+        LLM_PROVIDER_<MODE> wins for its mode; LLM_PROVIDER covers the rest.
+        """
+        if mode:
+            var = f"LLM_PROVIDER_{mode.upper()}"
+            raw = _env(var).lower()
+            if raw:
+                return cls._resolve(var, raw)
+        return cls._resolve("LLM_PROVIDER", _env("LLM_PROVIDER").lower() or cls.DEFAULT_PROVIDER)
+
+    @classmethod
+    def provider_class(cls, mode: str | None = None) -> type[LLMProvider]:
+        return cls.PROVIDERS[cls.provider_name(mode)]
+
+    @classmethod
+    def providers_in_use(cls) -> dict[str, type[LLMProvider]]:
+        """Each task mode and the adapter it runs on, for the startup check."""
+        return {mode: cls.provider_class(mode) for mode in cls.MODE_TEMPERATURES}
+
+    @classmethod
+    def create_provider(cls, mode: str = "generation") -> LLMProvider:
+        """Instantiate this mode's adapter with this mode's tuning."""
+        suffix = mode.upper()
+        adapter = cls.provider_class(mode)
+        model = _env(f"LLM_MODEL_{suffix}")
+        # LLM_MODEL and MODE_MODELS name models of the shared provider. A mode
+        # moved to another provider ignores them rather than sending, say, a
+        # Groq model name to Anthropic.
+        if not model and adapter is cls.provider_class():
+            model = cls.MODE_MODELS.get(mode) or _env("LLM_MODEL")
+        return adapter(
+            model=model or None,
+            temperature=float(_env(f"LLM_TEMPERATURE_{suffix}") or cls.MODE_TEMPERATURES.get(mode, 0.7)),
+            max_tokens=_env_int(f"LLM_MAX_TOKENS_{suffix}", cls.MODE_MAX_TOKENS.get(mode, 8192)),
+            timeout=_env_int(f"LLM_TIMEOUT_{suffix}", cls.MODE_TIMEOUTS.get(mode, DEFAULT_LLM_TIMEOUT_SECONDS)),
+            max_retries=DEFAULT_LLM_MAX_RETRIES,
+        )
+
+    @classmethod
+    def _init_prompt_cache(cls):
+        """
+        Cache LLM responses in Redis, keyed on the exact prompt text plus the
+        model's serialized params. Every call goes through
+        LLMSingleton.get(...).invoke(...), so wiring the cache here once covers
+        every mode and every provider.
+
+        Only an identical prompt is served from it — repeated runs against the
+        same documents, or a revision loop re-sending an unchanged prompt.
+
+        Falls back to no caching (a warning, not a crash) if Redis is
+        unreachable, so a missing cache backend never blocks generation.
+        """
+        if cls._cache_initialized:
+            return
+        cls._cache_initialized = True
+        try:
+            import redis as redis_lib
+            from langchain_community.cache import RedisCache
+            from langchain_core.globals import set_llm_cache
+
+            redis_url = os.getenv("REDIS_URL", "redis://redis:6379/0")
+            client = redis_lib.Redis.from_url(redis_url)
+            client.ping()
+            set_llm_cache(RedisCache(redis_=client, ttl=LLM_CACHE_TTL_SECONDS))
+            logger.info("LLM prompt cache enabled (Redis, ttl=%ds)", LLM_CACHE_TTL_SECONDS)
+        except Exception as e:
+            logger.warning("LLM prompt cache disabled — Redis unavailable: %s", e)
+
+    @classmethod
+    def get(cls, mode: str = "generation") -> ChatModelHandle:
+        if mode in cls._instances:
+            return cls._instances[mode]
+
+        with cls._lock:
+            if mode not in cls._instances:
+                cls._init_prompt_cache()
+
+                # Async clients initialised in synchronous worker threads need
+                # an event loop to exist.
+                import asyncio
+                try:
+                    asyncio.get_event_loop()
+                except RuntimeError:
+                    asyncio.set_event_loop(asyncio.new_event_loop())
+
+                provider = cls.create_provider(mode)
+                logger.info(
+                    "LLMSingleton routing mode=%s provider=%s model=%s temperature=%s "
+                    "max_tokens=%d timeout=%ds",
+                    mode, provider.name, provider.model, provider.temperature,
+                    provider.max_tokens, provider.timeout,
+                )
+                llm = provider.to_langchain(callbacks=[_make_token_callback(provider.model)])
+                cls._instances[mode] = ChatModelHandle(llm, provider)
+
+        return cls._instances[mode]

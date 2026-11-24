@@ -62,7 +62,7 @@ class User(Model):
     subscription_tier: Mapped[str] = mapped_column(String(50), server_default='free', nullable=False)
     
     # password_hash removed
-    monthly_generation_limit: Mapped[int] = mapped_column(Integer, server_default='50', nullable=False)
+    daily_generation_limit: Mapped[int] = mapped_column(Integer, server_default='50', nullable=False)
     monthly_generations_used: Mapped[int] = mapped_column(Integer, server_default='0', nullable=False)
     
     settings: Mapped[dict] = mapped_column(JSONB, server_default='{}', nullable=False)
@@ -77,6 +77,20 @@ class User(Model):
         return f'User(id={self.id}, business_id={self.business_id}, email={self.email})'
 
 
+# What an uploaded document is FOR. These are two different jobs and the same
+# file is almost never right for both:
+#   "voice"     - previously successful content. Teaches the Brand Brain how the
+#                 brand writes (voice, tone, style). Extracted via long context.
+#   "reference" - a product document, press kit, brief or spec. Supplies FACTS
+#                 about the subject through the RAG pipeline. It must NOT teach
+#                 the brand its voice: a press kit is written in press-kit
+#                 register, and letting it into the Brand Brain drags generated
+#                 copy toward that register instead of the brand's own.
+DOC_ROLE_VOICE = "voice"
+DOC_ROLE_REFERENCE = "reference"
+DOC_ROLES = (DOC_ROLE_VOICE, DOC_ROLE_REFERENCE)
+
+
 class BrandDocument(Model):
     __tablename__ = 'brand_documents'
     
@@ -86,6 +100,12 @@ class BrandDocument(Model):
     
     filename: Mapped[str] = mapped_column(String(255), nullable=False)
     content_type: Mapped[str] = mapped_column(String(50), nullable=False, index=True)
+    # See DOC_ROLE_* above. Defaults to "voice" so existing rows keep their
+    # current behaviour; only documents explicitly marked "reference" are held
+    # out of Brand Brain extraction.
+    doc_role: Mapped[str] = mapped_column(
+        String(20), server_default=DOC_ROLE_VOICE, nullable=False, index=True
+    )
     file_path: Mapped[Optional[str]] = mapped_column(Text)
     file_size_bytes: Mapped[Optional[int]] = mapped_column(Integer)
     file_content: Mapped[Optional[str]] = mapped_column(Text)  # Store actual file content
@@ -119,7 +139,9 @@ class BrandMetrics(Model):
     id: Mapped[int] = mapped_column(primary_key=True)
     business_id: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
     content_type: Mapped[str] = mapped_column(String(50), nullable=False, index=True)
-
+    page_number: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)   
+    total_pages: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)  
+    page_hash: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)  
     # FK to the source document. NULL for rows sourced from high-scoring generations.
     doc_id: Mapped[Optional[int]] = mapped_column(
         ForeignKey('brand_documents.id', ondelete='CASCADE'),
@@ -180,6 +202,16 @@ class Generation(Model):
     status:Mapped[str]        = mapped_column(String, default="pending") 
     score:Mapped[float]         = mapped_column(Float, nullable=True)
     content:Mapped[str]       = mapped_column(Text, nullable=True)        
+    # The enforcer's verdict. status='completed' does not imply approval: when
+    # the revision loop runs out of rounds the deployer still saves the last
+    # draft. NULL on rows saved before this column existed.
+    approved:Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True)
+    # The draft this one was rewritten from, when a reviewer rejected that draft
+    # with a reason. NULL for a first pass. A rejection already triggered a full
+    # regeneration, but it arrived as a new row with a new id and nothing
+    # connecting it to the feedback, so the rewrite was invisible to the person
+    # who asked for it.
+    parent_generation_id:Mapped[Optional[str]] = mapped_column(String, nullable=True, index=True)
     created_at:Mapped[datetime]    = mapped_column(DateTime, default=datetime.utcnow)
     completed_at:Mapped[datetime]  = mapped_column(DateTime, nullable=True)
 
@@ -288,7 +320,7 @@ class ReviewerLearning(Model):
     content_type: Mapped[str] = mapped_column(String(50), index=True)
     format_type: Mapped[str] = mapped_column(String(100))
     generated_content: Mapped[str] = mapped_column(Text)
-    creative_angle: Mapped[str] = mapped_column(String(200))
+    creative_angle: Mapped[str] = mapped_column(Text)
     
     # Agent scoring
     agent_auto_score: Mapped[float] = mapped_column(DECIMAL(3, 1))
@@ -305,6 +337,14 @@ class ReviewerLearning(Model):
     agent_correct: Mapped[Optional[bool]] = mapped_column(Boolean)
     features_used: Mapped[Optional[dict]] = mapped_column(JSONB)
     used_for_retraining: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+
+    # Regeneration provenance. `use_search` records the research mode the
+    # original request ran with so a rejection can be re-run the same way
+    # instead of silently switching sources; `regeneration_depth` counts how
+    # many reject -> regenerate hops produced this generation, so the human
+    # loop can be capped the way the writer/enforcer loop already is.
+    use_search: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    regeneration_depth: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
@@ -433,6 +473,14 @@ def init_db():
             from uuid import uuid4
             from sqlalchemy import text
             with engine.begin() as conn:
+                # pgvector. docker-compose gets this from init.sql, which only
+                # runs for that image's first-boot init; a managed Postgres
+                # (Render, Cloud SQL) never sees it. LlamaIndex's PGVectorStore
+                # also creates it lazily, but that happens on the first RAG
+                # call rather than at startup — better to fail loudly here than
+                # midway through a generation.
+                conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
+
                 # Check if column exists
                 check_sql = text("""
                     SELECT 1 
@@ -446,6 +494,33 @@ def init_db():
                     logger.info("Adding missing 'file_content' column to 'brand_documents'...")
                     conn.execute(text("ALTER TABLE brand_documents ADD COLUMN file_content TEXT"))
                     logger.info("Successfully added 'file_content' column")
+
+                # Regeneration provenance columns on reviewer_learning. Added
+                # the same self-healing way so an existing deployment does not
+                # need a migration step before the human-in-the-loop fix works.
+                for table, column, ddl in (
+                    ("reviewer_learning", "use_search", "ALTER TABLE reviewer_learning ADD COLUMN use_search BOOLEAN NOT NULL DEFAULT FALSE"),
+                    ("reviewer_learning", "regeneration_depth", "ALTER TABLE reviewer_learning ADD COLUMN regeneration_depth INTEGER NOT NULL DEFAULT 0"),
+                    ("brand_documents", "doc_role", "ALTER TABLE brand_documents ADD COLUMN doc_role VARCHAR(20) NOT NULL DEFAULT 'voice'"),
+                    # Nullable with no default: existing rows have no recorded
+                    # verdict, and must not be mistaken for approved ones.
+                    ("generations", "approved", "ALTER TABLE generations ADD COLUMN approved BOOLEAN"),
+                    # Which draft a rejection produced this one from. Without
+                    # it a rewrite triggered by reviewer feedback appeared as an
+                    # unrelated new row, and a reviewer who rejected a draft
+                    # with a reason concluded nothing had happened.
+                    ("generations", "parent_generation_id", "ALTER TABLE generations ADD COLUMN parent_generation_id VARCHAR"),
+                ):
+                    exists = conn.execute(text("""
+                        SELECT 1
+                        FROM information_schema.columns
+                        WHERE table_name=:tbl
+                        AND column_name=:col
+                    """), {"tbl": table, "col": column}).fetchone()
+                    if not exists:
+                        logger.info("Adding missing '%s' column to '%s'...", column, table)
+                        conn.execute(text(ddl))
+                        logger.info("Successfully added '%s' column", column)
 
 
         except Exception as migration_error:
@@ -465,15 +540,17 @@ def init_db():
 def get_db_session():
     """
     Context manager for database sessions with automatic cleanup.
-    
+    Callers are responsible for calling session.commit() explicitly.
+    Rolls back on unhandled exceptions.
+
     Usage:
         with get_db_session() as session:
-            user = session.query(User).first()
+            session.add(record)
+            session.commit()
     """
     session = session_maker()
     try:
         yield session
-        session.commit()
     except Exception as e:
         session.rollback()
         logger.error(f"Database session error: {e}", exc_info=True)
@@ -486,7 +563,6 @@ def get_db():
     session = session_maker()
     try:
         yield session
-        session.commit()
     except Exception as e:
         session.rollback()
         raise
