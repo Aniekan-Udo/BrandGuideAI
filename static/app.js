@@ -11,8 +11,9 @@ let appState = {
     sessionDocsCount: 0
 };
 
-// API Base URL config (Relative routes work on same origin)
-const API_BASE = window.location.origin;
+// Set in config.js when the UI is hosted apart from the API (e.g. on Vercel);
+// otherwise the API is at this page's own address.
+const API_BASE = (window.BRANDMAESTRO_API_BASE || window.location.origin).replace(/\/+$/, "");
 
 // Content types the pipeline supports, in display order. Mirrors
 // schema.CONTENT_TYPES on the server.

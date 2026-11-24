@@ -89,16 +89,10 @@ app = FastAPI(
     lifespan=lifespan
 )
 
-origins = [
-    "http://localhost:3000",
-    "http://127.0.0.1:3000",
-    "http://localhost:5173",
-    "http://127.0.0.1:5173",
-]
+from utils.cors import allowed_origins
 
-frontend_url = os.getenv("FRONTEND_URL")
-if frontend_url:
-    origins.append(frontend_url)
+# FRONTEND_URL may list several origins, comma-separated (see utils/cors.py).
+origins = allowed_origins(os.getenv("FRONTEND_URL"))
 
 app.add_middleware(
     CORSMiddleware,
