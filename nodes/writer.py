@@ -4,14 +4,60 @@ from model import LLMSingleton
 from brand_rag import BrandRAG
 from learning_memory import FeedbackPortSQL
 from brand_metrics import BrandMetricsSQL
-from prompts.writer import WRITER_PLANNER, WRITER_DRAFTER, WRITER_EDITOR, WRITER_REVISION
+from prompts.writer import (
+    WRITER_PLANNER,
+    WRITER_DRAFTER,
+    WRITER_EDITOR,
+    WRITER_REVISION,
+    HUMAN_DIRECTIVE_BLOCK,
+)
 from graph.state import GraphState
+from schema import CONTENT_TYPE_LABELS
+from utils.brand_profile import (
+    extract_asset_bank,
+    extract_brand_name,
+    extract_section,
+)
 
 logger = logging.getLogger(__name__)
 import re
+from utils.fact_spans import extract_fact_spans, render_fact_spans
 from utils.observe import observe
+from utils.provider_errors import provider_errors
 
 
+
+# The longest a writer call will wait for a rate limit to clear before giving up.
+# A per-minute limit asks for under a minute; a daily quota asks for hours, and
+# waiting that out inside a generation helps nobody.
+MAX_RETRY_WAIT_SECONDS = 90
+
+
+class WriterUnavailable(RuntimeError):
+    """The writer's model could not produce a draft, and there is no earlier one to fall back on."""
+
+
+def _invoke(prompt: str, step: str) -> str:
+    """One writer call, retried once when the provider says when to come back.
+
+    Raises the provider's error when it cannot answer; the caller decides what
+    to fall back on. The error text itself never becomes content. It once did:
+    a 429 was written into the draft as a bracketed system-error line, and the
+    deployer published that line as the finished post.
+    """
+    import time
+
+    from utils.provider_errors import retry_after
+
+    try:
+        return LLMSingleton.get().invoke(prompt).content
+    except provider_errors() as exc:
+        wait = retry_after(exc)
+        if wait is None or wait > MAX_RETRY_WAIT_SECONDS:
+            raise
+        logger.warning("Writer %s: provider busy (%s); retrying once in %.0fs", step, exc, wait)
+        time.sleep(wait)
+        return LLMSingleton.get().invoke(prompt).content
 
 
 DEFAULT_METRICS = {
@@ -35,85 +81,52 @@ DEFAULT_PATTERNS = {
 }
 
 
-def _extract_section(text: str, header: str) -> str:
-    """
-    Extract a named section from the brand_brains synthesis text.
-    Sections are delimited by lines starting with '#'.
-    
-    Matches by checking if the line (stripped of '#' and whitespace)
-    starts with the header — avoids partial matches like 'OPENING'
-    matching 'OPENING MOVE' inside section_patterns.
-    """
-    lines = text.split('\n')
-    capture = False
-    result = []
-    for line in lines:
-        # Normalize: strip '#' prefix and whitespace, then check if header matches
-        normalized = line.strip().lstrip('#').strip()
-        if normalized.upper().startswith(header.upper()):
-            capture = True
-            continue
-        if capture and line.strip().startswith('#'):
-            break
-        if capture:
-            result.append(line)
-    return '\n'.join(result).strip()
-
-
-
-def _extract_asset_bank(metrics: str) -> str:
-    """
-    Extract the BRAND ASSET BANK section and format it as an explicit
-    closed list of permitted claims for injection into the writer prompt.
-    This prevents the writer from hallucinating client counts, percentages,
-    and named frameworks by giving it only the facts it is allowed to use.
-    Now also extracts FINANCIAL TARGETS & PROJECTIONS so proposal-type content
-    can use specific numbers, dollar amounts, and timeframes without triggering
-    the hallucination gate.
-    """
-    match = re.search(
-        r"#\s*BRAND ASSET BANK\s*\n(.*?)(?=\n#\s+[A-Z]|\Z)",
-        metrics,
-        re.DOTALL | re.IGNORECASE
-    )
-    if not match:
-        return (
-            "No asset bank available yet. "
-            "Do NOT invent specific numbers, client counts, percentages, or ROI figures. "
-            "Use only general brand observations without specific data points."
-        )
-    asset_text = match.group(1).strip()
-
-    # Check whether a FINANCIAL TARGETS section exists in the asset bank
-    has_financial = bool(re.search(
-        r"FINANCIAL TARGETS", asset_text, re.IGNORECASE
-    ))
-
-    header = (
-        "PERMITTED BRAND CLAIMS — use ONLY these exact numbers and facts when writing brand experience claims.\n"
-        "Do NOT invent any number, percentage, client count, timeframe, or framework name not listed here.\n"
-    )
-    if has_financial:
-        header += (
-            "FINANCIAL TARGETS & PROJECTIONS listed below are explicitly permitted — "
-            "use them verbatim when writing program objectives, financial summaries, or roadmap timeframes.\n"
-        )
-
-    return header + "\n" + asset_text
-
-
-
 @observe("writer_node")
-def writer_node(state: GraphState, rag: BrandRAG, analyzer: BrandMetricsSQL,
-                memory: FeedbackPortSQL) -> GraphState:
+def writer_node(state: GraphState) -> GraphState:
     """
     Generates or revises brand-consistent content.
+
+    `rag`, `analyzer`, and `memory` are resolved per call from
+    state["business_id"] / state["content_type"] (see graph/deps.py)
+    rather than pre-bound, so this node is compatible with a graph
+    compiled once and reused across requests.
     """
+    from graph.deps import resolve_deps
+    rag, analyzer, memory = resolve_deps(state["business_id"], state["content_type"])
+
     topic        = state["topic"]
     content_type = state["content_type"]
+    content_label = CONTENT_TYPE_LABELS.get(content_type, content_type)
+    format_type  = state.get("format_type", "") or content_label
     research     = state["research"]
     feedback     = state.get("feedback", "")
+
+    # The facts in the source that have no second correct wording — quantities,
+    # dates, money and what they count. They lead the research block because the
+    # copying rules the writer reads further down are otherwise the last word on
+    # reusing the source, and obeying them cost a draft its numbers: told to
+    # discard the source's wording, it turned "more than seven men" into "a
+    # congregation" that "exceeds seven". These stay as written; the sentences
+    # around them are still the writer's to build.
+    fact_spans = extract_fact_spans(research)
+    if fact_spans:
+        research = f"{render_fact_spans(fact_spans)}\n\n{research}"
     iteration    = state.get("iteration", 0) + 1
+
+    # A human reviewer's rejection note, carried in from human_loop. Rendered
+    # once here and injected into whichever prompt this pass uses, so the
+    # instruction survives both the fresh planner/drafter/editor path and any
+    # later enforcer-driven revision rounds within the same run.
+    human_feedback = (state.get("human_feedback") or "").strip()
+    human_directive = (
+        HUMAN_DIRECTIVE_BLOCK.format(human_feedback=human_feedback)
+        if human_feedback else ""
+    )
+    if human_feedback:
+        logger.info(
+            "Writer applying reviewer directive (%d chars) at iteration %d",
+            len(human_feedback), iteration,
+        )
 
     try:
         metrics = analyzer.get_context()
@@ -124,35 +137,37 @@ def writer_node(state: GraphState, rag: BrandRAG, analyzer: BrandMetricsSQL,
     # Extract high-signal sections from brand brain for focused injection
     # These are injected individually — we do NOT also inject the full metrics blob
     # to avoid duplicate context that wastes tokens and confuses the model
-    generation_instructions = _extract_section(metrics, "GENERATION INSTRUCTIONS")
-    signature_phrases       = _extract_section(metrics, "SIGNATURE CONSTRUCTIONS")
-    brand_name              = _extract_section(metrics, "BRAND NAME")
+    generation_instructions = extract_section(metrics, "GENERATION INSTRUCTIONS")
+    signature_phrases       = extract_section(metrics, "SIGNATURE CONSTRUCTIONS")
+    brand_name              = extract_brand_name(metrics)
     
     # Formulaic patterns
-    opening_formula         = _extract_section(metrics, "OPENING PATTERN")
-    closing_formula         = _extract_section(metrics, "CLOSING PATTERN")
-    mechanical_rules        = _extract_section(metrics, "MECHANICAL RULES")
-    evidence_anchoring      = _extract_section(metrics, "EVIDENCE PATTERN")
-    diagnostic_style        = _extract_section(metrics, "DIAGNOSTIC STYLE")
-    reframing_moves         = _extract_section(metrics, "REFRAMING MOVES")
+    opening_formula         = extract_section(metrics, "OPENING PATTERN")
+    closing_formula         = extract_section(metrics, "CLOSING PATTERN")
+    mechanical_rules        = extract_section(metrics, "MECHANICAL RULES")
+    evidence_anchoring      = extract_section(metrics, "EVIDENCE PATTERN")
+    diagnostic_style        = extract_section(metrics, "DIAGNOSTIC STYLE")
+    reframing_moves         = extract_section(metrics, "REFRAMING MOVES")
     
     # Structural patterns — combine signature constructions + thinking templates
     # for a complete picture of the brand's canonical structural moves
-    structural_patterns = _extract_section(metrics, "SIGNATURE CONSTRUCTIONS")
-    thinking_templates  = _extract_section(metrics, "THINKING TEMPLATES")
-    canonical_formula   = _extract_section(metrics, "CANONICAL STRUCTURAL FORMULA")
+    structural_patterns = extract_section(metrics, "SIGNATURE CONSTRUCTIONS")
+    thinking_templates  = extract_section(metrics, "THINKING TEMPLATES")
+    canonical_formula   = extract_section(metrics, "CANONICAL STRUCTURAL FORMULA")
     if thinking_templates:
         structural_patterns = (structural_patterns + "\n\nTHINKING TEMPLATES:\n" + thinking_templates) if structural_patterns else thinking_templates
     if canonical_formula:
         structural_patterns = (structural_patterns + "\n\nCANONICAL STRUCTURAL FORMULA:\n" + canonical_formula) if structural_patterns else canonical_formula
     
     # New dimensions from improved extraction
-    pronoun_pattern         = _extract_section(metrics, "PRONOUN PATTERN")
-    qualification_style     = _extract_section(metrics, "QUALIFICATION STYLE")
-    tone_signature          = _extract_section(metrics, "TONE SIGNATURE")
+    measured_mechanics      = extract_section(metrics, "MEASURED MECHANICS")
+    pronoun_pattern         = extract_section(metrics, "PRONOUN PATTERN")
+    qualification_style     = extract_section(metrics, "QUALIFICATION STYLE")
+    tone_signature          = extract_section(metrics, "TONE SIGNATURE")
+    capitalization_style    = extract_section(metrics, "CAPITALIZATION STYLE")
 
     # Extract permitted claims asset bank — passed explicitly to prevent hallucination
-    asset_bank = _extract_asset_bank(metrics)
+    asset_bank = extract_asset_bank(metrics)
 
     # Fall back gracefully if sections are missing (cold start / sparse brain)
     if not generation_instructions:
@@ -181,8 +196,20 @@ def writer_node(state: GraphState, rag: BrandRAG, analyzer: BrandMetricsSQL,
         qualification_style = "State claims clearly and confidently."
     if not tone_signature:
         tone_signature = "Professional and natural."
+    if not capitalization_style:
+        capitalization_style = (
+            "No capitalization convention extracted yet — use standard sentence "
+            "case unless the STRUCTURAL EXAMPLES clearly show otherwise."
+        )
     if not structural_patterns:
         structural_patterns = "No structural patterns extracted yet — follow the opening/closing formulas and generation instructions above."
+
+    # How this brand builds sentences, measured from its own documents: shapes
+    # and habits, never its text. Describing a voice in adjectives was what let
+    # a draft satisfy every rule and still read like nobody.
+    voice_spec = extract_section(metrics, "VOICE SPEC") or (
+        "No voice spec measured yet — follow the mechanical rules and generation instructions above."
+    )
 
     # Structural RAG — fetch examples of structural elements
     try:
@@ -217,41 +244,54 @@ def writer_node(state: GraphState, rag: BrandRAG, analyzer: BrandMetricsSQL,
     if iteration == 1:
         # STEP 1: PLANNER
         prompt_planner = WRITER_PLANNER.format(
+            human_directive=human_directive,
             topic=topic,
-            content_type=content_type,
+            content_type=content_label,
+            format_type=format_type,
+            research=research or "No research available — plan generically around the topic string above.",
+            structural_examples=structural_examples,
             opening_formula=opening_formula,
             closing_formula=closing_formula,
             structural_patterns=structural_patterns
         )
         try:
-            outline_result = LLMSingleton.get().invoke(prompt_planner)
-            outline = outline_result.content
+            outline = _invoke(prompt_planner, "planner")
             logger.info("Planner generated outline successfully.")
-        except Exception as e:
-            logger.error("Planner LLM failed: %s", e)
-            outline = "[System Error: Unable to generate outline]"
+        except provider_errors() as e:
+            # The drafter can work from the research alone; an outline helps
+            # but is not required.
+            logger.error("Planner LLM failed, drafting without an outline: %s", e)
+            outline = "No outline available. Plan the piece from the research and the topic."
 
         # STEP 2: DRAFTER
         prompt_drafter = WRITER_DRAFTER.format(
+            voice_spec=voice_spec,
+            human_directive=human_directive,
             topic=topic,
-            content_type=content_type,
+            content_type=content_label,
+            format_type=format_type,
             outline=outline,
             brand_name=brand_name,
             asset_bank=asset_bank,
             research=research,
-            structural_examples=structural_examples
+            structural_examples=structural_examples,
+            capitalization_style=capitalization_style
         )
         try:
-            draft_result = LLMSingleton.get().invoke(prompt_drafter)
-            draft = draft_result.content
+            draft = _invoke(prompt_drafter, "drafter")
             logger.info("Drafter generated draft successfully.")
-        except Exception as e:
+        except provider_errors() as e:
+            # Nothing written yet, so nothing to deliver: fail the generation.
             logger.error("Drafter LLM failed: %s", e)
-            draft = "[System Error: Unable to generate draft]"
+            raise WriterUnavailable(f"The writer's model could not produce a draft: {e}") from e
 
         # STEP 3: EDITOR
         prompt_editor = WRITER_EDITOR.format(
+            voice_spec=voice_spec,
+            human_directive=human_directive,
+            measured_mechanics=measured_mechanics or "No measured mechanics available.",
             draft=draft,
+            format_type=format_type,
             generation_instructions=generation_instructions,
             mechanical_rules=mechanical_rules,
             evidence_anchoring=evidence_anchoring,
@@ -260,20 +300,41 @@ def writer_node(state: GraphState, rag: BrandRAG, analyzer: BrandMetricsSQL,
             signature_phrases=signature_phrases,
             pronoun_pattern=pronoun_pattern,
             qualification_style=qualification_style,
-            tone_signature=tone_signature
+            tone_signature=tone_signature,
+            capitalization_style=capitalization_style
         )
         try:
-            editor_result = LLMSingleton.get().invoke(prompt_editor)
-            content = editor_result.content
+            content = _invoke(prompt_editor, "editor")
             logger.info("Editor finalized content successfully.")
-        except Exception as e:
-            logger.error("Editor LLM failed: %s", e)
-            content = f"[System Error: Unable to finalize content - {str(e)[:80]}]"
+        except provider_errors() as e:
+            # The unedited draft is real writing; the enforcer judges it like
+            # any other and sends it back for revision.
+            logger.error("Editor LLM failed, passing on the unedited draft: %s", e)
+            content = draft
 
     else:
+        # Gates already corrected in earlier rounds. Handed to the editor as
+        # standing constraints, because it only ever sees the newest feedback:
+        # without them it fixes the latest violation and reintroduces one it had
+        # already resolved, and the loop oscillates until it runs out of
+        # iterations on a draft that was acceptable two rounds earlier.
+        prior_violations = state.get("violation_history") or []
+        if prior_violations:
+            listed = "\n".join(f"  - {v}" for v in prior_violations)
+            standing_constraints = (
+                "STANDING CONSTRAINTS — already corrected once, do not "
+                f"reintroduce:\n{listed}"
+            )
+        else:
+            standing_constraints = "STANDING CONSTRAINTS: none yet."
+
         # REVISION: Only run the Editor (WRITER_REVISION) to fix feedback
         prompt = WRITER_REVISION.format(
+            voice_spec=voice_spec,
+            standing_constraints=standing_constraints,
+            human_directive=human_directive,
             previous_content=state.get("content", ""),
+            format_type=format_type,
             feedback=feedback,
             flagged_passages=state.get("flagged_passages", "No specific passages flagged."),
             style_match=state.get("style_match", 0.0),
@@ -292,14 +353,21 @@ def writer_node(state: GraphState, rag: BrandRAG, analyzer: BrandMetricsSQL,
             pronoun_pattern=pronoun_pattern,
             qualification_style=qualification_style,
             tone_signature=tone_signature,
+            capitalization_style=capitalization_style,
             asset_bank=asset_bank
         )
         try:
-            result = LLMSingleton.get().invoke(prompt)
-            content = result.content
-        except Exception as e:
-            logger.error("Revision LLM failed: %s", e)
-            content = f"[System Error: Unable to revise content - {str(e)[:80]}]"
+            content = _invoke(prompt, "revision")
+        except provider_errors() as e:
+            # Keep the draft the enforcer already judged and stop revising: the
+            # enforcer sees writer_unavailable and hands over to the deployer,
+            # which delivers the best round of the run.
+            logger.error("Revision LLM failed, ending the revision loop: %s", e)
+            return {
+                **state,
+                "iteration": iteration,
+                "writer_unavailable": f"{type(e).__name__}: {str(e)[:200]}",
+            }
 
     logger.info("Writer iteration=%d complete for topic=%r", iteration, topic)
 

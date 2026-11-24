@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>BrandMuse AI — Premium Brand Voice Synthesis & RAG</title>
+    <title>BrandMaestro AI — On-Brand Content Writing</title>
     <!-- Modern Fonts -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -11,7 +11,7 @@
     <!-- FontAwesome for Premium Icons -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <!-- Stylesheet -->
-    <link rel="stylesheet" href="/static/theme.css">
+    <link rel="stylesheet" href="/theme.css">
         <!-- Markdown Parser -->
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
 </head>
@@ -26,20 +26,25 @@
         <div class="auth-panel-left">
             <div class="auth-panel-brand">
                 <span class="logo-icon"><i class="fa-solid fa-wand-magic-sparkles"></i></span>
-                <span class="logo-text">BrandMuse<span>AI</span></span>
+                <span class="logo-text">BrandMaestro<span>AI</span></span>
             </div>
             <div class="auth-panel-hero">
-                <h2 class="auth-panel-headline">Your brand voice.<br>Every piece of content.</h2>
-                <p class="auth-panel-sub">Upload your best content once. BrandMuse AI learns your unique voice and generates perfectly aligned ads, blogs, proposals, and emails with a single prompt.</p>
+                <h2 class="auth-panel-headline">Your brand's voice.<br>Every piece of content.</h2>
+                <p class="auth-panel-sub">Upload your approved writing once. BrandMaestro AI learns that exact voice and generates on-brand blog posts, ad copy, proposals, scripts, and press releases from a single prompt.</p>
                 <ul class="auth-feature-list">
                     <li><i class="fa-solid fa-check"></i> One-time brand voice setup</li>
                     <li><i class="fa-solid fa-check"></i> Real-time streaming generation</li>
                     <li><i class="fa-solid fa-check"></i> Self-improving from feedback</li>
-                    <li><i class="fa-solid fa-check"></i> Ads &middot; Blogs &middot; Proposals &middot; Emails</li>
+                    <li><i class="fa-solid fa-check"></i> Blogs &middot; Ads &middot; Proposals &middot; Scripts &middot; Press Releases</li>
                 </ul>
             </div>
+            <!-- The product shot carries the left panel. It previously had no
+                 src and display:none, so the lower half of this screen was
+                 blank. -->
             <div class="auth-dashboard-preview">
-                <img id="auth-preview-img" alt="BrandMuse AI Dashboard" style="display:none; width:100%; border-radius:10px; box-shadow:0 20px 50px rgba(0,0,0,0.6); border:1px solid rgba(255,255,255,0.08);">
+                <img id="auth-preview-img" src="/images/hero_dashboard.png"
+                     alt="The BrandMaestro AI dashboard, showing a generated caption set scored against a brand profile"
+                     fetchpriority="high" decoding="async">
             </div>
         </div>
 
@@ -49,7 +54,7 @@
                 <div class="auth-header">
                     <div class="logo">
                         <span class="logo-icon"><i class="fa-solid fa-wand-magic-sparkles"></i></span>
-                        <span class="logo-text">BrandMuse<span>AI</span></span>
+                        <span class="logo-text">BrandMaestro<span>AI</span></span>
                     </div>
                     <p class="auth-subtitle">Sign in to your workspace</p>
                 </div>
@@ -105,6 +110,7 @@
                         <i class="fa-solid fa-user-plus"></i>
                     </button>
                 </form>
+                <p class="auth-legal">By using BrandMaestro AI you agree to the <a href="/terms.html">Terms of Service</a> and <a href="/privacy.html">Privacy Policy</a>.<br><a href="/about.html">About BrandMaestro AI</a></p>
             </div>
         </div>
     </div>
@@ -116,7 +122,7 @@
             <div class="sidebar-brand">
                 <div class="logo">
                     <span class="logo-icon"><i class="fa-solid fa-wand-magic-sparkles"></i></span>
-                    <span class="logo-text">BrandMuse<span>AI</span></span>
+                    <span class="logo-text">BrandMaestro<span>AI</span></span>
                 </div>
             </div>
             
@@ -141,9 +147,17 @@
                     <i class="fa-solid fa-file-arrow-up"></i>
                     <span>Brand Documents</span>
                 </button>
+                <button class="nav-item" onclick="switchPanel('brain')" id="nav-brain">
+                    <i class="fa-solid fa-fingerprint"></i>
+                    <span>Brand Brain</span>
+                </button>
                 <button class="nav-item" onclick="switchPanel('patterns')" id="nav-patterns">
                     <i class="fa-solid fa-brain"></i>
                     <span>Learning Memory</span>
+                </button>
+                <button class="nav-item" onclick="switchPanel('youtube')" id="nav-youtube">
+                    <i class="fa-brands fa-youtube"></i>
+                    <span>YouTube Studio</span>
                 </button>
             </nav>
 
@@ -165,7 +179,7 @@
                 </div>
                 <div class="header-actions">
                     <div class="business-id-selector">
-                        <span class="label">Active Business ID:</span>
+                        <span class="label">Business ID:</span>
                         <div class="business-id-field">
                             <span id="display-business-id" class="value">b12345-uuid-67890</span>
                             <button class="btn-copy" onclick="copyBusinessId()" title="Copy Business ID"><i class="fa-regular fa-copy"></i></button>
@@ -249,7 +263,7 @@
                         </div>
                         <div class="info-alert">
                             <i class="fa-solid fa-circle-info"></i>
-                            <p>BrandMuse AI automatically synthesizes feedback to continuously align generated outputs with your top-performing uploaded documents.</p>
+                            <p>BrandMaestro AI automatically synthesizes feedback to continuously align generated outputs with your top-performing uploaded documents.</p>
                         </div>
                     </div>
                 </div>
@@ -261,7 +275,7 @@
                     <!-- Form Controls -->
                     <div class="content-card">
                         <h2>Configure Creative Output</h2>
-                        <p class="card-subtitle">Define parameters to generate on-brand corporate messaging.</p>
+                        <p class="card-subtitle">Define parameters to generate on-brand content in your brand's voice.</p>
                         
                         <form id="form-generator" onsubmit="triggerGeneration(event)">
                             <div class="input-group">
@@ -269,39 +283,57 @@
                                 <div class="format-cards">
                                     <label class="format-card active">
                                         <input type="radio" name="content_type" value="blog" checked onclick="selectFormatCard(this)">
-                                        <i class="fa-solid fa-newspaper"></i>
+                                        <i class="fa-solid fa-pen-to-square"></i>
                                         <span>Blog Post</span>
                                     </label>
                                     <label class="format-card">
-                                        <input type="radio" name="content_type" value="social" onclick="selectFormatCard(this)">
-                                        <i class="fa-brands fa-linkedin-in"></i>
-                                        <span>Social Post</span>
-                                    </label>
-                                    <label class="format-card">
                                         <input type="radio" name="content_type" value="ad" onclick="selectFormatCard(this)">
-                                        <i class="fa-solid fa-rectangle-ad"></i>
-                                        <span>Ad Creative</span>
+                                        <i class="fa-solid fa-bullhorn"></i>
+                                        <span>Ad Copy</span>
                                     </label>
                                     <label class="format-card">
                                         <input type="radio" name="content_type" value="proposal" onclick="selectFormatCard(this)">
-                                        <i class="fa-solid fa-file-contract"></i>
+                                        <i class="fa-solid fa-file-signature"></i>
                                         <span>Proposal</span>
+                                    </label>
+                                    <label class="format-card">
+                                        <input type="radio" name="content_type" value="script" onclick="selectFormatCard(this)">
+                                        <i class="fa-solid fa-scroll"></i>
+                                        <span>Script</span>
+                                    </label>
+                                    <label class="format-card">
+                                        <input type="radio" name="content_type" value="press_release" onclick="selectFormatCard(this)">
+                                        <i class="fa-solid fa-newspaper"></i>
+                                        <span>Press Release</span>
                                     </label>
                                 </div>
                             </div>
 
                             <div class="input-group">
                                 <label for="gen-topic">Core Subject / Campaign Topic</label>
-                                <input type="text" id="gen-topic" placeholder="e.g. Next-Generation RAG Optimization for Financial Compliance" required>
+                                <input type="text" id="gen-topic" placeholder="e.g. Launch of our new analytics dashboard for small retailers" required>
                             </div>
 
 
-                            <div class="input-row toggle-row">
-                                <div class="toggle-container">
-                                    <span class="toggle-label"><i class="fa-solid fa-globe"></i> Activate Real-Time Web Search</span>
-                                    <label class="switch">
-                                        <input type="checkbox" id="gen-use-search">
-                                        <span class="slider"></span>
+                            <!-- Research sources. The two document kinds reach the
+                                 pipeline by different paths - product documents through
+                                 RAG, previously published work through the Brand Brain -
+                                 and Parallel's web search is a third, independent source.
+                                 This picks which of them the researcher may draw on. -->
+                            <div class="input-row">
+                                <label class="field-label">RESEARCH SOURCES</label>
+                                <div class="research-mode-row">
+                                    <label class="research-mode-option">
+                                        <input type="radio" name="research_mode" value="both" id="gen-mode-both" checked>
+                                        <span><i class="fa-solid fa-layer-group"></i> Both</span>
+                                    </label>
+                                    <label class="research-mode-option">
+                                        <input type="radio" name="research_mode" value="rag" id="gen-mode-rag">
+                                        <span><i class="fa-solid fa-box-open"></i> Product docs</span>
+                                    </label>
+                                    <label class="research-mode-option">
+                                        <input type="radio" name="research_mode" value="web" id="gen-mode-web">
+                                        <span><i class="fa-solid fa-globe"></i> Web search</span>
                                     </label>
                                 </div>
                             </div>
@@ -323,6 +355,26 @@
                         <!-- Terminal logs -->
                         <div class="stream-console" id="stream-console">
                             <span class="placeholder-text"><i class="fa-solid fa-arrow-left"></i> Configure inputs and trigger the generation stream. Execution logs will render in real time.</span>
+                        </div>
+
+                        <!-- Research gathered: the brand's own documents plus, when
+                             web search is on, what Parallel returned. Shown because a
+                             judge (and a writer) should be able to see what the copy was
+                             actually grounded in, rather than trust that a search
+                             happened somewhere off-screen. -->
+                        <div class="research-box hidden" id="research-box">
+                            <div class="content-rendered-header">
+                                <h3><i class="fa-solid fa-magnifying-glass"></i> Research Gathered</h3>
+                                <span class="research-badge" id="research-source-badge"></span>
+                            </div>
+                            <div class="research-section" id="research-owned-wrap">
+                                <div class="research-section-title"><i class="fa-solid fa-folder-open"></i> Brand's own documents <span class="research-tag">authoritative</span></div>
+                                <div class="research-body" id="research-owned-text"></div>
+                            </div>
+                            <div class="research-section hidden" id="research-external-wrap">
+                                <div class="research-section-title"><i class="fa-solid fa-globe"></i> Live web search <span class="research-tag research-tag-parallel">Parallel Search API</span></div>
+                                <div class="research-body" id="research-external-text"></div>
+                            </div>
                         </div>
 
                         <!-- Generated Content output markup container -->
@@ -384,8 +436,8 @@
                 <div class="documents-layout">
                     <!-- Upload Document Card -->
                     <div class="content-card">
-                        <h2>Upload Top-Performing Copy</h2>
-                        <p class="card-subtitle">Feed your best marketing outputs, newsletters, proposals, or ad copy into the vector database. BrandMuse AI extracts linguistic rules automatically.</p>
+                        <h2>Upload Approved Brand Materials</h2>
+                        <p class="card-subtitle">Feed your past blog posts, ads, proposals, scripts, or press releases into the vector database. BrandMaestro AI extracts linguistic rules automatically.</p>
                         
                         <form id="form-upload" onsubmit="uploadDocument(event)">
                             <div class="input-row">
@@ -393,17 +445,41 @@
                                     <label for="upload-content-type">Associate Content Type Profile</label>
                                     <select id="upload-content-type" required>
                                         <option value="blog">Blog Post Model</option>
-                                        <option value="social">Social Media Post Model</option>
-                                        <option value="ad">Advertisement Copy Model</option>
-                                        <option value="proposal">Business Proposal Model</option>
+                                        <option value="ad">Ad Copy Model</option>
+                                        <option value="proposal">Proposal Model</option>
+                                        <option value="script">Script Model</option>
+                                        <option value="press_release">Press Release Model</option>
                                     </select>
                                 </div>
                             </div>
                             
+                            <!-- Which of the two intake paths this file takes. They are
+                                 genuinely different pipelines, not a tag on one upload:
+                                 a brand-voice document is read whole into the Brand Brain
+                                 and never indexed, a product document is chunked into the
+                                 RAG index and never reaches the Brain. Until this control
+                                 existed the form always sent the first kind, so the
+                                 retrieval index could not be filled from the UI at all -
+                                 which is what the "Product docs" research mode reads from. -->
+                            <div class="input-row">
+                                <label class="field-label">DOCUMENT KIND</label>
+                                <div class="research-mode-row">
+                                    <label class="research-mode-option">
+                                        <input type="radio" name="doc_kind" value="brand-voice" id="upload-kind-voice" checked>
+                                        <span><i class="fa-solid fa-feather"></i> Brand voice</span>
+                                    </label>
+                                    <label class="research-mode-option">
+                                        <input type="radio" name="doc_kind" value="product" id="upload-kind-product">
+                                        <span><i class="fa-solid fa-box-open"></i> Product doc</span>
+                                    </label>
+                                </div>
+                                <p class="field-hint" id="upload-kind-hint">Previously published work. Read whole into the Brand Brain to learn how this brand writes. Not indexed for retrieval.</p>
+                            </div>
+
                             <!-- Drag & Drop Zone -->
                             <div class="upload-dropzone" id="upload-dropzone" onclick="triggerFileInput()">
                                 <i class="fa-solid fa-cloud-arrow-up"></i>
-                                <p class="primary-msg">Select or drop reference file here</p>
+                                <p class="primary-msg">Select or drop your document here</p>
                                 <p class="secondary-msg">Supports UTF-8 encoded .txt, .csv, and .pdf documents (Max 100k chars)</p>
                                 <input type="file" id="upload-file-input" class="hidden" onchange="handleFileSelect(event)" required>
                             </div>
@@ -417,29 +493,38 @@
 
                             <button type="submit" class="btn btn-primary btn-block" id="btn-upload-submit">
                                 <i class="fa-solid fa-upload"></i>
-                                <span>Upload and Process Reference Document</span>
+                                <span>Upload and Process Document</span>
                             </button>
                         </form>
                     </div>
 
                     <!-- Uploaded Docs List -->
                     <div class="content-card">
-                        <h2>Currently Vectorized Brand Guidelines</h2>
-                        <p class="card-subtitle">Documents utilized to build RAG context for content generation.</p>
-                        
+                        <div class="card-header">
+                            <div>
+                                <h2>Currently Vectorized Brand Guidelines</h2>
+                                <p class="card-subtitle">Documents utilized to build RAG context for content generation.</p>
+                            </div>
+                            <button class="btn btn-secondary btn-sm" onclick="loadUploadedDocsList()" title="Reload from the server">
+                                <i class="fa-solid fa-rotate"></i>
+                                <span>Refresh</span>
+                            </button>
+                        </div>
+
                         <div class="documents-table-wrapper">
                             <table class="data-table">
                                 <thead>
                                     <tr>
                                         <th>Filename</th>
                                         <th>Content Type Alignment</th>
+                                        <th>Role</th>
                                         <th>Indexed On</th>
-                                        <th>Integrity Status</th>
+                                        <th>Status</th>
                                     </tr>
                                 </thead>
                                 <tbody id="table-documents-body">
                                     <tr>
-                                        <td colspan="4" class="table-empty">
+                                        <td colspan="5" class="table-empty">
                                             <i class="fa-regular fa-folder"></i>
                                             <p>No guideline documents vectorized yet. Use the upload card to sync brand guidelines.</p>
                                         </td>
@@ -448,10 +533,77 @@
                             </table>
                         </div>
                     </div>
+
+                    <!-- Danger zone: clearing what the system has learned.
+                         Kept visually separate from the upload and list cards
+                         so it cannot be mistaken for a routine action. -->
+                    <div class="content-card danger-zone">
+                        <div class="card-header">
+                            <div>
+                                <h2><i class="fa-solid fa-triangle-exclamation"></i> Reset Brand Brain</h2>
+                                <p class="card-subtitle">
+                                    Deletes every document for one content type, their embeddings, and the
+                                    voice profile learned from them. Your other content types are untouched.
+                                    This cannot be undone.
+                                </p>
+                            </div>
+                        </div>
+                        <div class="input-row">
+                            <div class="input-group">
+                                <label for="reset-content-type">Content type to clear</label>
+                                <!-- Mirrors the upload form's options exactly.
+                                     Offering a type the UI cannot upload to
+                                     would only ever clear nothing. -->
+                                <select id="reset-content-type">
+                                    <option value="blog">Blog Post Model</option>
+                                    <option value="ad">Ad Copy Model</option>
+                                    <option value="proposal">Proposal Model</option>
+                                    <option value="script">Script Model</option>
+                                    <option value="press_release">Press Release Model</option>
+                                </select>
+                            </div>
+                            <button id="btn-reset-brain" class="btn btn-danger" onclick="handleResetBrandBrain()">
+                                <i class="fa-regular fa-trash-can"></i>
+                                <span>Clear This Brand Brain</span>
+                            </button>
+                        </div>
+                    </div>
                 </div>
             </section>
 
             <!-- PANEL: LEARNING MEMORY -->
+            <!-- The synthesised voice profile. This is what the writer is steered
+                 by and what the enforcer scores against, and it was previously
+                 invisible: the API could delete a Brand Brain but never return
+                 one, so nothing showed what had been learned from a brand's
+                 documents. It is served by the same get_context() the graph
+                 calls, so what is shown here cannot drift from what is used. -->
+            <section id="panel-brain" class="dashboard-panel">
+                <div class="memory-header-card">
+                    <div class="memory-card-details">
+                        <h2>Synthesised Brand Brain</h2>
+                        <p>Extracted from your uploaded brand-voice documents. Measured rates are counted from the corpus, not described in a prompt.</p>
+                    </div>
+                    <div class="profile-selector">
+                        <button class="btn btn-secondary active" onclick="loadBrandBrain('blog')" id="btn-brain-blog">Blog Posts</button>
+                        <button class="btn btn-secondary" onclick="loadBrandBrain('ad')" id="btn-brain-ad">Ad Copy</button>
+                        <button class="btn btn-secondary" onclick="loadBrandBrain('proposal')" id="btn-brain-proposal">Proposals</button>
+                        <button class="btn btn-secondary" onclick="loadBrandBrain('script')" id="btn-brain-script">Scripts</button>
+                        <button class="btn btn-secondary" onclick="loadBrandBrain('press_release')" id="btn-brain-press_release">Press Releases</button>
+                    </div>
+                </div>
+
+                <div class="content-card">
+                    <div class="output-header">
+                        <h2><i class="fa-solid fa-fingerprint"></i> Voice Profile</h2>
+                        <div class="output-status" id="brain-status-badge">Idle</div>
+                    </div>
+                    <div class="brain-body" id="brain-text">
+                        <span class="placeholder-text">Select a content profile to load its Brand Brain.</span>
+                    </div>
+                </div>
+            </section>
+
             <section id="panel-patterns" class="dashboard-panel">
                 <div class="memory-header-card">
                     <div class="memory-card-details">
@@ -460,9 +612,10 @@
                     </div>
                     <div class="profile-selector">
                         <button class="btn btn-secondary active" onclick="loadMemoryPatterns('blog')" id="btn-memory-blog">Blog Posts</button>
-                        <button class="btn btn-secondary" onclick="loadMemoryPatterns('social')" id="btn-memory-social">Social Media</button>
                         <button class="btn btn-secondary" onclick="loadMemoryPatterns('ad')" id="btn-memory-ad">Ad Copy</button>
                         <button class="btn btn-secondary" onclick="loadMemoryPatterns('proposal')" id="btn-memory-proposal">Proposals</button>
+                        <button class="btn btn-secondary" onclick="loadMemoryPatterns('script')" id="btn-memory-script">Scripts</button>
+                        <button class="btn btn-secondary" onclick="loadMemoryPatterns('press_release')" id="btn-memory-press_release">Press Releases</button>
                     </div>
                 </div>
 
@@ -496,10 +649,148 @@
                     </div>
                 </div>
             </section>
+            <!-- PANEL: YOUTUBE STUDIO (optional module, static/youtube.js) -->
+            <section id="panel-youtube" class="dashboard-panel">
+                <div class="memory-header-card">
+                    <div class="memory-card-details">
+                        <h2>YouTube Studio</h2>
+                        <p>Turn approved marketing scripts into stories on your YouTube channel. Words come from marketing unchanged; to change them, regenerate the script there.</p>
+                    </div>
+                    <div class="profile-selector">
+                        <button class="btn btn-secondary active" id="yt-tab-scripts" onclick="ytStudio.showTab('scripts')">Scripts</button>
+                        <button class="btn btn-secondary" id="yt-tab-characters" onclick="ytStudio.showTab('characters')">Characters</button>
+                        <button class="btn btn-secondary" id="yt-tab-styles" onclick="ytStudio.showTab('styles')">Styles</button>
+                        <button class="btn btn-secondary" id="yt-tab-projects" onclick="ytStudio.showTab('projects')">Projects</button>
+                        <button class="btn btn-secondary" id="yt-tab-channel" onclick="ytStudio.showTab('channel')">Channel</button>
+                    </div>
+                </div>
+                <div class="yt-notice hidden" id="yt-notice"></div>
+
+                <div class="yt-tab" id="yt-view-scripts">
+                    <div class="content-card">
+                        <details id="yt-import" class="yt-import">
+                            <summary><strong><i class="fa-solid fa-file-import"></i> Import your own script</strong>
+                                <span class="yt-muted">paste it or upload a .txt / .md file</span></summary>
+                            <form id="yt-import-form" onsubmit="ytStudio.importScript(event)">
+                                <div class="input-group"><label for="yt-import-title">Title</label>
+                                    <input id="yt-import-title" maxlength="200" placeholder="e.g. Crumb Sourdough 30-second ad"></div>
+                                <div class="input-group"><label for="yt-import-content">Script</label>
+                                    <textarea id="yt-import-content" rows="10" maxlength="20000" placeholder="EXT. BAKERY - DAWN&#10;&#10;The ovens were cold.&#10;&#10;MAYA: One more try.&#10;LEO: You said that yesterday."></textarea></div>
+                                <p class="field-hint">Write dialogue as <code>NAME: line</code>; everything else is narration. Scene headings like <code>EXT. BAKERY - DAY</code> are not spoken. Or upload a file: <input id="yt-import-file" type="file" accept=".txt,.md,text/plain,text/markdown"></p>
+                                <p class="field-hint">Importing a script approves it for video. It is labelled <em>Imported</em>, because content writing did not write or check it.</p>
+                                <div class="yt-actions"><button type="submit" class="btn btn-primary btn-sm"><i class="fa-solid fa-file-import"></i> <span>Import script</span></button></div>
+                            </form>
+                        </details>
+                    </div>
+                    <div class="content-card">
+                        <div class="card-header">
+                            <div>
+                                <h2><i class="fa-solid fa-scroll"></i> Approved scripts</h2>
+                                <p class="card-subtitle">Scripts you imported, scripts a person approved in content writing, and scripts the enforcer approved that no person rejected.</p>
+                            </div>
+                            <button class="btn btn-secondary btn-sm" onclick="ytStudio.loadScripts()"><i class="fa-solid fa-rotate"></i> <span>Refresh</span></button>
+                        </div>
+                        <div class="documents-table-wrapper"><table class="data-table">
+                            <thead><tr><th>Topic</th><th>Approval</th><th>Words</th><th>Format</th><th></th></tr></thead>
+                            <tbody id="yt-scripts-body"></tbody>
+                        </table></div>
+                    </div>
+                </div>
+
+                <div class="yt-tab hidden" id="yt-view-characters">
+                    <div class="content-card">
+                        <h2><i class="fa-solid fa-user-plus"></i> New character</h2>
+                        <p class="card-subtitle">Each character has its own voice. On-screen characters also need face photos and an approved character sheet.</p>
+                        <form id="yt-character-form" onsubmit="ytStudio.createCharacter(event)">
+                            <div class="input-row yt-form-row">
+                                <div class="input-group"><label for="yt-char-name">Name</label><input id="yt-char-name" maxlength="100" required placeholder="e.g. Maya"></div>
+                                <div class="input-group"><label for="yt-char-voice">Voice</label><select id="yt-char-voice" required></select></div>
+                                <div class="input-group"><label for="yt-char-notes">Notes (optional)</label><input id="yt-char-notes" maxlength="2000" placeholder="e.g. calm, late 20s"></div>
+                            </div>
+                            <div class="yt-actions">
+                                <button type="button" class="btn btn-secondary btn-sm" onclick="ytStudio.previewSelectedVoice()"><i class="fa-solid fa-play"></i> <span>Hear voice</span></button>
+                                <button type="submit" class="btn btn-primary btn-sm"><i class="fa-solid fa-plus"></i> <span>Add character</span></button>
+                            </div>
+                        </form>
+                        <p class="field-hint" id="yt-preview-hint"></p>
+                    </div>
+                    <div class="content-card">
+                        <div class="card-header"><h2><i class="fa-solid fa-users"></i> Characters</h2></div>
+                        <div class="documents-table-wrapper"><table class="data-table">
+                            <thead><tr><th>Name</th><th>Voice</th><th>Face &amp; sheet</th><th>Notes</th><th></th></tr></thead>
+                            <tbody id="yt-characters-body"></tbody>
+                        </table></div>
+                    </div>
+                    <div class="content-card hidden" id="yt-character-detail"></div>
+                </div>
+
+                <div class="yt-tab hidden" id="yt-view-styles">
+                    <div class="content-card">
+                        <h2><i class="fa-solid fa-palette"></i> New style</h2>
+                        <p class="card-subtitle">A style lock is added to every scene of a project, so the whole story shares one look.</p>
+                        <form id="yt-style-form" onsubmit="ytStudio.createStyle(event)">
+                            <div class="input-row yt-style-row">
+                                <div class="input-group"><label for="yt-style-name">Name</label><input id="yt-style-name" maxlength="100" required placeholder="e.g. Warm film"></div>
+                                <div class="input-group"><label for="yt-style-prompt">Look</label><input id="yt-style-prompt" maxlength="2000" required placeholder="e.g. Cinematic 35mm film still, warm morning light, soft grain"></div>
+                            </div>
+                            <div class="yt-actions"><button type="submit" class="btn btn-primary btn-sm"><i class="fa-solid fa-plus"></i> <span>Add style</span></button></div>
+                        </form>
+                    </div>
+                    <div class="content-card">
+                        <div class="card-header"><h2><i class="fa-solid fa-swatchbook"></i> Styles</h2></div>
+                        <div id="yt-styles-list"></div>
+                    </div>
+                    <div class="content-card">
+                        <h2><i class="fa-solid fa-box-open"></i> Products &amp; logos</h2>
+                        <p class="card-subtitle">Upload each product photo once, named as scripts call it. Shots that name a product show it, copied from its photo. Logos go on end cards. Screens are screenshots of your app or site: a shot set to one shows it exactly as uploaded, for step-by-step tutorials. Music tracks play under videos; use only music you have the rights to (for example from the YouTube Audio Library).</p>
+                        <form id="yt-asset-form" onsubmit="ytStudio.createAsset(event)">
+                            <div class="input-row yt-form-row">
+                                <div class="input-group"><label for="yt-asset-name">Name</label><input id="yt-asset-name" maxlength="100" required placeholder="e.g. Crumb Sourdough Loaf"></div>
+                                <div class="input-group"><label for="yt-asset-kind">Kind</label><select id="yt-asset-kind"><option value="product">Product</option><option value="location">Location</option><option value="logo">Logo</option><option value="screen">Screen (app screenshot)</option><option value="music">Music track</option></select></div>
+                                <div class="input-group"><label for="yt-asset-file">Image</label><input id="yt-asset-file" type="file" accept="image/jpeg,image/png,image/webp,audio/mpeg,audio/wav,audio/mp4,audio/ogg,audio/flac,.mp3,.wav,.m4a,.ogg,.flac" required></div>
+                            </div>
+                            <div class="yt-actions"><button type="submit" class="btn btn-primary btn-sm"><i class="fa-solid fa-upload"></i> <span>Add asset</span></button></div>
+                        </form>
+                        <details class="yt-import" style="margin-top:12px">
+                            <summary><strong><i class="fa-solid fa-mountain-sun"></i> Draw a location instead</strong>
+                                <span class="yt-muted">for a place that recurs across episodes</span></summary>
+                            <form id="yt-draw-form" onsubmit="ytStudio.drawAsset(event)">
+                                <div class="input-row yt-form-row">
+                                    <div class="input-group"><label for="yt-draw-name">Name</label><input id="yt-draw-name" maxlength="100" required placeholder="e.g. Storm Peak"></div>
+                                    <div class="input-group"><label for="yt-draw-description">Description</label><input id="yt-draw-description" maxlength="1000" required placeholder="e.g. A jagged black mountain summit above the clouds at dusk"></div>
+                                </div>
+                                <div class="yt-actions"><button type="submit" class="btn btn-secondary btn-sm"><i class="fa-solid fa-wand-magic-sparkles"></i> <span>Draw location</span></button>
+                                    <span class="yt-muted">One image, about $0.07. Shots that name it are drawn in the same place.</span></div>
+                            </form>
+                        </details>
+                        <div id="yt-assets-list" class="yt-assets"></div>
+                    </div>
+                </div>
+
+                <div class="yt-tab hidden" id="yt-view-projects">
+                    <div class="content-card" id="yt-projects-card">
+                        <div class="card-header">
+                            <h2><i class="fa-solid fa-clapperboard"></i> Projects</h2>
+                            <button class="btn btn-secondary btn-sm" onclick="ytStudio.loadProjects()"><i class="fa-solid fa-rotate"></i> <span>Refresh</span></button>
+                        </div>
+                        <div class="documents-table-wrapper"><table class="data-table">
+                            <thead><tr><th>Topic</th><th>Format</th><th>Approval</th><th>Status</th><th>Length</th><th></th></tr></thead>
+                            <tbody id="yt-projects-body"></tbody>
+                        </table></div>
+                    </div>
+                    <div class="content-card hidden" id="yt-project-detail"></div>
+                </div>
+
+                <div class="yt-tab hidden" id="yt-view-channel">
+                    <div class="content-card" id="yt-channel-card"></div>
+                </div>
+                <audio id="yt-player" class="hidden"></audio>
+            </section>
         </main>
     </div>
 
     <!-- Script imports -->
-    <script src="/static/app.js"></script>
+    <script src="/app.js"></script>
+    <script src="/youtube.js"></script>
 </body>
 </html>

@@ -1,79 +1,81 @@
-from contextlib import asynccontextmanager
-from fastapi import Depends, Request, File, HTTPException
-from fastapi.responses import JSONResponse
-import asyncio
+import json
+import os
+import time
 from datetime import datetime, timezone, timedelta
-
+from typing import Annotated
 from uuid import uuid4
 
-import json
-import time
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 
-from fastapi import APIRouter
-from limiter import limiter, RateLimitExceeded
-router = APIRouter()
-from utils import logger, create_idempotency_key
-
-
+from auth import get_current_user, require_business_access
+from limiter import limiter
 from schema import GenerateRequest, FeedbackRequest, TaskResponse
+from utils import logger
 
+router = APIRouter()
 
 
 @router.post("/generate/stream")
 @limiter.limit("60/minute")
-async def generate_stream(request: Request, body: GenerateRequest):
+async def generate_stream(
+    request: Request,
+    body: GenerateRequest,
+    current_user: Annotated[object, Depends(get_current_user)],
+):
     from celery_task import generate_content
     from database import get_db_session, Generation, User
-    from redis.asyncio import Redis as AsyncRedis
+    from celery_task import get_async_redis
+
+    require_business_access(current_user, body.business_id)
 
 
     # ── Daily quota enforcement (Redis counter, resets at midnight UTC) ─────
-    async_redis = AsyncRedis(host="redis", port=6379, decode_responses=True)
+    async_redis = get_async_redis()
 
-    with get_db_session() as session:
-        user: User | None = None
-        if body.user_id:
-            user = session.get(User, body.user_id)
-        if user is None:
-            user = session.query(User).filter(User.business_id == body.business_id).first()
+    try:
+        # Quota is always charged to the authenticated user, never to a
+        # user_id supplied by the client.
+        user = current_user
 
-    if user:
-        now = datetime.now(timezone.utc)
-        today_str = now.strftime("%Y-%m-%d")
-        redis_key = f"daily_gen:{user.id}:{today_str}"
+        if user:
+            now = datetime.now(timezone.utc)
+            today_str = now.strftime("%Y-%m-%d")
+            redis_key = f"daily_gen:{user.id}:{today_str}"
 
-        # Atomically increment; returns new value
-        daily_used = await async_redis.incr(redis_key)
+            # Atomically increment; returns new value
+            daily_used = await async_redis.incr(redis_key)
 
-        # Set TTL to expire exactly at the next midnight UTC (only on first use)
-        if daily_used == 1:
-            seconds_until_midnight = (
-                86400
-                - now.hour * 3600
-                - now.minute * 60
-                - now.second
-            )
-            await async_redis.expire(redis_key, seconds_until_midnight)
+            # Set TTL to expire exactly at the next midnight UTC (only on first use)
+            if daily_used == 1:
+                seconds_until_midnight = (
+                    86400
+                    - now.hour * 3600
+                    - now.minute * 60
+                    - now.second
+                )
+                await async_redis.expire(redis_key, seconds_until_midnight)
 
-        if daily_used > user.monthly_generation_limit:
-            # Roll back the increment so it doesn't inflate future checks
-            await async_redis.decr(redis_key)
+            if daily_used > user.daily_generation_limit:
+                # Roll back the increment so it doesn't inflate future checks
+                await async_redis.decr(redis_key)
 
-            tomorrow = datetime(now.year, now.month, now.day, tzinfo=timezone.utc)
-            tomorrow += timedelta(days=1)
+                tomorrow = datetime(now.year, now.month, now.day, tzinfo=timezone.utc)
+                tomorrow += timedelta(days=1)
 
-            raise HTTPException(
-                status_code=429,
-                detail={
-                    "code": "QUOTA_EXHAUSTED",
-                    "message": "Daily generation limit reached.",
-                    "limit": user.monthly_generation_limit,
-                    "used": int(daily_used) - 1,
-                    "reset_date": tomorrow.strftime("%B %-d, %Y"),
-                    "reset_iso": tomorrow.isoformat(),
-                }
-            )
+                raise HTTPException(
+                    status_code=429,
+                    detail={
+                        "code": "QUOTA_EXHAUSTED",
+                        "message": "Daily generation limit reached.",
+                        "limit": user.daily_generation_limit,
+                        "used": int(daily_used) - 1,
+                        "reset_date": f"{tomorrow.strftime('%B')} {tomorrow.day}, {tomorrow.year}",
+                        "reset_iso": tomorrow.isoformat(),
+                    }
+                )
+    finally:
+        await async_redis.aclose()
     # ─────────────────────────────────────────────────────────────────────────
 
     generation_id = str(uuid4())
@@ -84,49 +86,105 @@ async def generate_stream(request: Request, body: GenerateRequest):
         content_type=body.content_type,
         topic=body.topic,
         format_type=body.format_type,
-        user_id=body.user_id,
-        use_search=body.use_search,  
+        user_id=current_user.id,
+        use_search=body.use_search,
+        research_mode=body.research_mode,
     )
 
     async def stream():
         yield json.dumps({"generation_id": generation_id}) + "\n"
 
-        
-        async_redis = AsyncRedis(
-            host="redis",
-            port=6379,
-            decode_responses=True,
-            socket_timeout=15,          
-            socket_connect_timeout=5
+        from celery_task import get_async_redis
+        from redis.exceptions import (
+            ConnectionError as RedisConnectionError,
+            TimeoutError as RedisTimeoutError,
         )
+
+        stream_redis = get_async_redis()
         start = time.monotonic()
-        MAX_STREAM_SECONDS = 300
 
-        while True:
-            if await request.is_disconnected():
-                break
-            if time.monotonic() - start > MAX_STREAM_SECONDS:
-                logger.warning("Stream timed out generation_id=%s", generation_id)
-                break
+        # An enforcer iteration is a full LLM round trip, and the press-release
+        # path can run several. 300s cut the stream off mid-pipeline, so the
+        # client saw the researcher's output and then a clean end of response.
+        MAX_STREAM_SECONDS = int(os.getenv("MAX_STREAM_SECONDS", "900"))
+        BLPOP_SECONDS = 5
 
-            chunk = await async_redis.blpop(f"stream:{generation_id}", timeout=10)  # type: ignore[misc]
+        try:
+            while True:
+                if await request.is_disconnected():
+                    break
+                if time.monotonic() - start > MAX_STREAM_SECONDS:
+                    logger.warning("Stream timed out generation_id=%s", generation_id)
+                    break
 
-            if chunk is None:
-                with get_db_session() as session:
-                    record = session.get(Generation, generation_id)
-                    if record and record.status in ("completed", "failed", "timeout"):
-                        break
-                continue
+                try:
+                    chunk = await stream_redis.blpop(
+                        f"stream:{generation_id}", timeout=BLPOP_SECONDS
+                    )  # type: ignore[misc]
+                except (RedisTimeoutError, RedisConnectionError) as e:
+                    # Not an error condition. No node has published yet, which
+                    # is the normal state while a writer or enforcer LLM call is
+                    # in flight — those take far longer than one BLPOP window.
+                    # Uncaught, this propagated out of the generator and ended
+                    # the response, so every generation appeared to stop after
+                    # the researcher.
+                    logger.debug(
+                        "No stream data yet for generation_id=%s (%s)",
+                        generation_id, e.__class__.__name__,
+                    )
+                    chunk = None
 
-            yield chunk[1] + "\n"
+                if chunk is None:
+                    with get_db_session() as session:
+                        record = session.get(Generation, generation_id)
+                        if record and record.status in ("completed", "failed", "timeout"):
+                            break
+
+                    # Keeps the connection demonstrably alive across a long node.
+                    # Without it a reverse proxy can drop an apparently idle
+                    # response, and a watching user cannot tell a slow enforcer
+                    # from a hung one.
+                    yield json.dumps(
+                        {"heartbeat": round(time.monotonic() - start)}
+                    ) + "\n"
+                    continue
+
+                yield chunk[1] + "\n"
+        finally:
+            await stream_redis.aclose()
 
     return StreamingResponse(stream(), media_type="application/json")
 
 
 @router.post("/feedback", response_model=TaskResponse)
 @limiter.limit("30/minute")
-async def submit_feedback(request: Request, feedback: FeedbackRequest):
+async def submit_feedback(
+    request: Request,
+    feedback: FeedbackRequest,
+    current_user: Annotated[object, Depends(get_current_user)],
+):
     from celery_task import process_feedback
+
+    require_business_access(current_user, feedback.business_id)
+
+    # Checked here rather than left to the worker. The task is queued and the
+    # response returns before it runs, so a verdict on a generation that does
+    # not exist was accepted with a 200 and a page that said the rewrite was on
+    # its way. Whatever the reviewer is looking at, if there is no row for it
+    # the rewrite cannot happen and they need to hear so now.
+    from database import Generation, get_db_session
+
+    with get_db_session() as session:
+        exists = session.query(Generation.generation_id).filter_by(
+            generation_id=feedback.generation_id,
+            business_id=feedback.business_id,
+        ).first()
+    if not exists:
+        raise HTTPException(
+            status_code=404,
+            detail=(f"No generation {feedback.generation_id} for this business. "
+                    "Nothing was recorded and no rewrite was queued."),
+        )
 
     task = process_feedback.delay(
         generation_id=feedback.generation_id,
@@ -151,8 +209,14 @@ async def health():
 
 
 @router.get("/patterns/{business_id}/{content_type}")
-async def get_patterns(business_id: str, content_type: str):
+async def get_patterns(
+    business_id: str,
+    content_type: str,
+    current_user: Annotated[object, Depends(get_current_user)],
+):
     from learning_memory import FeedbackPortSQL
+
+    require_business_access(current_user, business_id)
 
     memory = FeedbackPortSQL(business_id=business_id)
     patterns = memory.get_patterns(content_type)

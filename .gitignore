@@ -1,6 +1,49 @@
+# Secrets - never commit
+.env
+# Google service account keys — never commit, whatever they are named
+*-*.json
+*service-account*.json
+*credentials*.json
+application_default_credentials.json
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Node / frontend
 node_modules/
 dist/
 .vercel/
-.env
-.env.local
+
+# Large binaries that must not be in the repo
+*.tar.gz
+
+# Tooling / evaluation caches
+.deepeval/
+.deepeval*
 *.log
+
+# Editors and OS junk
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Working backups created during development
+*.bak
+*.bak*
+*.pre-refactor
+
+# Local agent/session config
+.claude/
+
+# YouTube Automation local file store (YT_STORAGE_PROVIDER=local)
+.yt_storage/

@@ -3,6 +3,8 @@
 METRICS_EXTRACTION = """You are a document analyst. Analyze the document below and extract a precise writing intelligence profile that can be used to replicate HOW this brand writes — not WHAT it wrote.
 
 CRITICAL RULE: You are extracting PATTERNS, not content. Never copy sentences, phrases, or specific words from the document. Every field must describe the writing mechanics and structural moves in abstract, reusable terms.
+
+ON THE EXAMPLES BELOW: every "e.g." in this schema is there to show the SHAPE of an answer, not the subject matter of one. Several happen to be drawn from B2B marketing writing — client counts, ROI figures, audit names. That is incidental. This brand may be a software company, a consumer brand, an agency, a public body, a nonprofit, or anything else, and its authority, evidence and social proof may take completely different forms (customer counts, product specifications, awards, case studies, publication history) or may not exist at all. Describe what THIS document actually does. If a field has no counterpart in this brand's writing, say so plainly rather than inventing something to fill the shape of the example.
 ## OUTPUT REQUIREMENTS
 
 Your output must be a JSON object that matches the schema below exactly. Every field must describe writing mechanics in abstract, reusable terms — never copy sentences or phrases from the document. For numeric fields (0.0–1.0), use the scale definitions below. For string fields, describe the pattern in one to two precise sentences.
@@ -33,11 +35,12 @@ Return ONLY a JSON object with no preamble or markdown. Use this schema:
     "numerical_density": "<low|medium|high>",
     "pronoun_pattern": "<describe the dominant pronoun strategy — which pronouns are used, in what contexts, and how the brand positions itself relative to the reader. e.g. 'first-person plural dominant; brand name used as subject in authority claims; second-person for diagnosing reader problems'>",
     "punctuation_habits": "<describe distinctive punctuation choices — em dashes, semicolons, exclamation marks, ellipses, colons. Note frequency and function. e.g. 'heavy em-dash usage for asides; no semicolons; rare exclamation marks'>",
+    "capitalization_style": "<describe the letter-casing convention this document actually uses — one of: 'standard sentence case', 'all lowercase (including sentence starts and the brand/product name)', 'all uppercase', 'title case headlines', or 'mixed/stylized' with a one-phrase description of the mix. Base this ONLY on what the document itself does, never assume standard case by default.>",
     "question_usage": "<describe how and where questions appear — rhetorical, Socratic, direct, or none. Frequency, placement (section openings, endings, mid-paragraph), and whether they are answered. e.g. 'rhetorical questions at section endings; always followed by the brand's answer; 1-2 per piece'>",
     "metaphor_usage": "<describe metaphor/analogy patterns — source domains the brand draws from, how metaphors are used (to explain processes, evoke emotions, simplify complexity), and what domains are avoided. Return 'none' if brand avoids metaphor>",
     "qualification_style": "<describe how the brand handles nuance and certainty — does it hedge ('might', 'could', 'perhaps'), qualify with data ('in 73% of cases'), qualify with experience ('in our experience'), or assert without qualification? Note what it avoids>",
     "mechanical_rules": {{
-      "sentence_rhythm": "<describe the rhythm mechanics — e.g. 'alternates short declarative sentences (3-8 words) with longer explanatory ones (15-25 words); uses 1-2 fragment sentences per section for punch'>",
+      "sentence_rhythm": "<describe the rhythm mechanics WITHOUT word counts — e.g. 'runs several clipped declaratives together, then breaks the run with one longer sentence that carries the consequence; drops to a fragment when a beat lands'. Never write a number of words, a range, or a ratio: a writer given '3-8 words' writes to the number and the result reads like nobody, and a judge given one faults any draft that crosses it.>",
       "paragraph_constraints": "<describe paragraph limits — e.g. 'max 4 sentences per paragraph; opening paragraph is always 2-3 sentences; single-sentence paragraphs used for emphasis'>",
       "heading_format": "<describe heading conventions — e.g. 'numbered bold headings for main sections; no bullet points as primary structure'>",
       "evidence_anchoring": "<describe how claims are grounded — e.g. 'every major claim is anchored to a specific number, client count, timeframe, or measurable outcome; vague assertions are never left unanchored'>"
@@ -172,7 +175,7 @@ Return your synthesis as a well-structured plain text brand writing intelligence
 METRICS_SYNTHESIS_TEMPLATE = """Structure your output exactly as follows:
 
 # BRAND NAME
-[The brand name extracted from documents. If not found: Not extracted — inject manually.]
+[The brand name extracted from documents, written as plain text on this line — do NOT put the name in the "# BRAND NAME" header itself. If not found: Not extracted — inject manually.]
 
 # BRAND ASSET BANK
 [Aggregate the asset_bank entries from all profiles. Deduplicate. CRITICAL RULE: DO NOT list every single claim. For social_proof_claims: list a maximum of the TOP 15 most frequent or highest-impact claims. For named_frameworks and stated_values: list a maximum of the TOP 5 most important unique entries. For financial_targets: list ALL unique targets — do not cap these, as every distinct figure is a permitted number the writer may use.]
@@ -225,6 +228,9 @@ PRONOUN PATTERN:
 PUNCTUATION HABITS:
 [Distinctive punctuation choices — which marks are used, how frequently, and for what purpose. Which marks are avoided.]
 
+CAPITALIZATION STYLE:
+[State plainly which one applies, based on the actual profiles, not an assumption: "standard sentence case", "all lowercase", "all uppercase", "title case headlines", or "mixed/stylized" with a short description. If profiles disagree, say so and default to standard sentence case.]
+
 QUESTION USAGE:
 [How questions are used — type, frequency, placement, and whether they are answered.]
 
@@ -235,7 +241,7 @@ QUALIFICATION STYLE:
 [How certainty and nuance are expressed — what replaces hedging, how claims are qualified.]
 
 MECHANICAL RULES:
-- Sentence rhythm: [how rhythm is mechanically achieved — describe the alternation pattern]
+- Sentence rhythm: [how rhythm is mechanically achieved — describe the alternation pattern in words, never in word counts, ranges or ratios]
 - Paragraph constraints: [specific structural limits]
 - Heading format: [exact format convention]
 - Evidence anchoring: [the rule for how claims must be grounded]
@@ -261,7 +267,12 @@ EVIDENCE PATTERN:
 [The rule for how claims are grounded — describe the pattern not the examples.]
 
 # SIGNATURE CONSTRUCTIONS
-[Describe 4-6 distinctive writing constructions as abstract moves. Describe WHAT THE CONSTRUCTION DOES, not what it says:]
+[Describe 4-6 distinctive writing constructions as abstract moves. Describe WHAT THE CONSTRUCTION DOES, not what it says.
+Never quote the documents. A construction written as a phrase in quotation marks is a sentence from somebody's
+document, and a writer given it will paste it into a new piece — one did, opening a scene with another story's line.
+  WRONG: The "He realizes that..." declarative phrase to introduce pivotal plot points
+  RIGHT: States a discovery flatly, as a fact the character has just arrived at, without dramatising the moment
+Any line here containing a quoted phrase found in the source documents is removed before the writer sees it.]
 - [Construction 1: describe the move]
 - [Construction 2: describe the move]
 

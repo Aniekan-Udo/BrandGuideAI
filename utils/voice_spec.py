@@ -1,0 +1,753 @@
+"""How a brand writes, measured from its own documents — shapes and rules, never its sentences.
+
+The Brand Brain used to describe a voice in adjectives ("short, declarative
+sentences") and pin it down with single numbers ("6.3 four-plus-syllable words
+per 100"). Neither is writable from. A model told to raise a syllable rate
+reaches it with "convene" and "congregation"; a model told "short sentences"
+writes any short sentences at all.
+
+This measures the shapes instead — how long sentences run, how often they are
+fragments, what an opening is made of, how dialogue is introduced — and states
+them as rules with ranges. It never quotes the corpus: brand documents are the
+evidence, not material to paste into a prompt.
+
+    prose_only()      strip front matter, headings, scene directions and appendices
+    shape_metrics()   measure one document's shapes
+    corpus_spec()     combine documents into medians and ranges
+    render_spec()     the VOICE SPEC section of the Brand Brain
+    beat_grammar()    what an opening, a closing and a section are made of, as shapes
+"""
+from __future__ import annotations
+
+import re
+import statistics
+from typing import Iterable, Optional
+
+# Lines that are not the brand's prose: the document's own framing, its
+# headings, and the appendices some documents end with. Counting them is how a
+# corpus of plain scene writing came out with a four-syllable rate set by
+# "protagonist", "original" and "identity" — words from the notes, not the work.
+_FRONT_MATTER = re.compile(
+    r"^\s*(note|disclaimer|original retelling|not the original|based on|source|copyright|©|version|draft)\b",
+    re.I,
+)
+_SEPARATOR = re.compile(r"^\s*[=\-_*#~]{3,}\s*$")
+_SCENE_HEADING = re.compile(r"^\s*(INT\.|EXT\.|INT/EXT|I/E|EST\.)", re.I)
+_TRANSITION = re.compile(
+    r"^\s*(FADE IN|FADE OUT|FADE TO BLACK|CUT TO|SMASH CUT|DISSOLVE TO|MATCH CUT|INTERCUT|THE END)\b",
+    re.I,
+)
+_ACT_OR_SECTION = re.compile(r"^\s*(ACT\b|PART\b|CHAPTER\b|SCENE\b|#{1,6}\s)", re.I)
+# Sections that comment on the work rather than being it.
+_APPENDIX = re.compile(
+    r"^\s*#*\s*(structural lesson|lesson|summary|analysis|notes?|takeaways?|appendix|about this)\b",
+    re.I,
+)
+_LABEL_LINE = re.compile(r"^\s*([A-Z][A-Z .'\-]{1,30}):\s*\S")
+_SENTENCE_SPLIT = re.compile(r"(?<=[.!?])\s+")
+_WORD = re.compile(r"[A-Za-z0-9']+")
+_NOMINALISATION = re.compile(r"\b\w{4,}(?:tion|sion|ment|ity|ance|ence|ness|ism|ivity)\b", re.I)
+# "'s" is a contraction after a pronoun and a possessive after a noun, and
+# telling them apart is the whole job here. Counting both, a screenplay's
+# possessives — Kan's, EMK's, the group's — read as contractions: one draft was
+# measured at 1.71 per 100 words while containing none at all, and told it used
+# more contractions than the brand. The brand's own band was built the same
+# wrong way, from possessives in its screenplays.
+#
+# The other endings are unambiguous: nothing takes "'re", "'ve", "'ll" or "n't"
+# except a contraction.
+_CONTRACTION_STEMS = (
+    "he|she|it|that|there|here|what|who|where|when|how|why|let|one|this|"
+    "everybody|somebody|nobody|everyone|someone|no one|nothing|something"
+)
+_CONTRACTION = re.compile(
+    rf"\b(?:\w+['’](?:t|re|ve|ll|d|m)|(?:{_CONTRACTION_STEMS})['’]s)\b", re.I
+)
+_OPENERS = ("he", "she", "they", "it", "we", "you", "i", "his", "her", "their")
+
+
+def _is_heading(line: str) -> bool:
+    stripped = line.strip()
+    if not stripped:
+        return False
+    if _SEPARATOR.match(stripped) or _ACT_OR_SECTION.match(stripped) or _SCENE_HEADING.match(stripped):
+        return True
+    if _TRANSITION.match(stripped):
+        return True
+    letters = [c for c in stripped if c.isalpha()]
+    # A short line in capitals is a title or a card, not a sentence.
+    return bool(letters) and all(c.isupper() for c in letters) and len(stripped.split()) <= 12
+
+
+def body_lines(text: str) -> list[str]:
+    """The document without its framing or its appendix, headings and all.
+
+    Keeps scene headings and transitions, because the shape of an opening is
+    partly made of them; prose_only() drops those as well.
+    """
+    kept, started = [], False
+    for index, line in enumerate(text.splitlines()):
+        stripped = line.strip()
+        if not stripped:
+            kept.append("")
+            continue
+        # A lesson or notes *heading* ends the document's writing.
+        if _APPENDIX.match(stripped) and (_is_heading(line) or stripped.startswith("#")):
+            break
+        # A note anywhere ("NOTE: this is an original retelling") is framing,
+        # whether it sits above the title or below it.
+        if _FRONT_MATTER.match(stripped) or _SEPARATOR.match(stripped):
+            continue
+        if _is_heading(line):
+            started = True  # the framing block ends at the first heading
+            kept.append(stripped)
+            continue
+        if not started and index < 3:
+            continue
+        kept.append(stripped)
+    return kept
+
+
+def prose_only(text: str) -> str:
+    """The document's own writing: no front matter, headings, scene directions or appendices."""
+    return "\n".join(line for line in body_lines(text) if not _is_heading(line)).strip()
+
+
+def sentences(text: str) -> list[str]:
+    out = []
+    for block in text.splitlines():
+        block = block.strip()
+        if not block:
+            continue
+        out += [s.strip() for s in _SENTENCE_SPLIT.split(block) if s.strip()]
+    return out
+
+
+def _share(count: int, total: int) -> float:
+    return round(100.0 * count / total, 1) if total else 0.0
+
+
+def shape_metrics(text: str) -> dict:
+    """The shapes of one document's prose. Rates are per 100 words, shares per 100 sentences."""
+    words = _WORD.findall(text)
+    lines = [l.strip() for l in text.splitlines() if l.strip()]
+    sents = sentences(text)
+    total_words, total_sents = len(words), len(sents)
+    if total_words < 30 or not total_sents:
+        return {}
+    lengths = [len(_WORD.findall(s)) for s in sents]
+    per100 = lambda n: round(100.0 * n / total_words, 2)
+    dialogue_lines = sum(1 for l in lines if _LABEL_LINE.match(l))
+    return {
+        "words": total_words,
+        "sentences": total_sents,
+        "mean_words_per_sentence": round(statistics.mean(lengths), 1),
+        "median_words_per_sentence": round(statistics.median(lengths), 1),
+        # How much the sentence lengths move. Flatness is the one thing about
+        # rhythm a reader can feel and a judge cannot measure, and asking the
+        # judge to rule on it is what condemned this brand's own gold script.
+        "words_per_sentence_variation": round(statistics.pstdev(lengths), 2) if len(lengths) > 4 else 0.0,
+        "share_sentences_under_6_words": _share(sum(1 for n in lengths if n < 6), total_sents),
+        "share_sentences_over_20_words": _share(sum(1 for n in lengths if n > 20), total_sents),
+        "share_sentences_opening_with_pronoun": _share(
+            sum(1 for s in sents if s.split() and s.split()[0].strip(",.:;\"'").lower() in _OPENERS), total_sents),
+        "share_single_sentence_paragraphs": _share(sum(1 for l in lines if len(sentences(l)) == 1), len(lines)),
+        "commas_per_sentence": round(text.count(",") / total_sents, 2),
+        "nominalisations_per_100_words": per100(len(_NOMINALISATION.findall(text))),
+        "four_plus_syllable_words_per_100_words": per100(
+            sum(1 for w in words if len(re.findall(r"[aeiouy]+", w.lower())) >= 4)),
+        "contractions_per_100_words": per100(len(_CONTRACTION.findall(text))),
+        "mean_word_length": round(sum(len(w) for w in words) / total_words, 2),
+        "share_lines_that_are_dialogue": _share(dialogue_lines, len(lines)),
+    }
+
+
+def band(values: list[float]) -> dict:
+    """Median and the middle half of a set of per-document measurements."""
+    clean = sorted(v for v in values if v is not None)
+    if not clean:
+        return {}
+    if len(clean) == 1:
+        return {"median": clean[0], "low": clean[0], "high": clean[0], "documents": 1}
+    quantiles = statistics.quantiles(clean, n=4, method="inclusive")
+    return {"median": round(statistics.median(clean), 2), "low": round(quantiles[0], 2),
+            "high": round(quantiles[2], 2), "documents": len(clean)}
+
+
+def corpus_spec(documents: Iterable[str]) -> dict:
+    """Per-document shapes combined into medians and ranges, plus the markers the brand uses."""
+    from utils.brand_fixtures import measure_fixtures
+
+    documents = list(documents)
+    per_document, transitions, labels = [], {}, {}
+    prose_total = 0
+    for document in documents:
+        prose = prose_only(document)
+        metrics = shape_metrics(prose)
+        if metrics:
+            per_document.append(metrics)
+            prose_total += metrics["words"]
+        for line in body_lines(document):
+            stripped = line.strip()
+            if _TRANSITION.match(stripped):
+                marker = stripped.rstrip(":.").upper()[:24]
+                transitions[marker] = transitions.get(marker, 0) + 1
+            match = _LABEL_LINE.match(stripped)
+            if match:
+                labels[match.group(1).strip()] = labels.get(match.group(1).strip(), 0) + 1
+    fixtures = measure_fixtures(documents)
+    if not per_document:
+        # Too short to measure shapes, which is ordinary for ad copy. Its
+        # tagline and spelling are still facts about the brand, and short copy
+        # is where a tagline matters most.
+        has_fixtures = fixtures.get("sign_off") or fixtures.get("phrases") or fixtures.get("spelling")
+        return {"documents": len(documents), "fixtures": fixtures} if has_fixtures else {}
+    keys = [k for k in per_document[0] if k not in ("words", "sentences")]
+    return {
+        "documents": len(per_document),
+        "prose_words": prose_total,
+        "bands": {key: band([m[key] for m in per_document if key in m]) for key in keys},
+        "transitions": sorted(transitions, key=transitions.get, reverse=True)[:6],
+        "speaker_labels": sorted(labels, key=labels.get, reverse=True)[:8],
+        # The phrases it repeats word for word and the spelling it writes in.
+        # Recorded exactly, unlike everything above, because reusing them is
+        # the brand's habit rather than copying its documents.
+        "fixtures": fixtures,
+    }
+
+
+def beat_grammar(documents: Iterable[str], lines_per_beat: int = 6) -> dict:
+    """What an opening and a closing are made of, as a sequence of shapes rather than text."""
+    def shape(line: str) -> str:
+        stripped = line.strip()
+        if _TRANSITION.match(stripped):
+            return "a transition line"
+        if _SCENE_HEADING.match(stripped):
+            return "a scene heading"
+        if _ACT_OR_SECTION.match(stripped) or _is_heading(stripped):
+            return "an act or section title"
+        if _LABEL_LINE.match(stripped):
+            return "a speaker label and a line of dialogue"
+        # Bands, not counts. Printed as "(3 words)" these were read as a
+        # specification: the enforcer twice refused a draft because "the opening
+        # pattern fails to match the brand's specific sentence length sequence",
+        # which is not a thing any writer can aim at and not what was measured.
+        count = len(_WORD.findall(stripped))
+        if count <= 3:
+            return "a very short sentence"
+        if count <= 8:
+            return "a short sentence"
+        if count <= 16:
+            return "a medium-length sentence"
+        return "a longer sentence"
+
+    openings, closings = [], []
+    for document in documents:
+        lines = [l.strip() for l in body_lines(document) if l.strip()]
+        if not lines:
+            continue
+        body_start = next((i for i, l in enumerate(lines) if _TRANSITION.match(l) or _SCENE_HEADING.match(l)), 0)
+        openings.append([shape(l) for l in lines[body_start:body_start + lines_per_beat]])
+        closings.append([shape(l) for l in lines[-lines_per_beat:]])
+
+    def common(sequences: list[list[str]]) -> list[str]:
+        if not sequences:
+            return []
+        length = min(len(s) for s in sequences)
+        result = []
+        for position in range(length):
+            options = [s[position] for s in sequences]
+            result.append(max(set(options), key=options.count))
+        return result
+
+    return {"opening": common(openings), "closing": common(closings)}
+
+
+RHYTHM_BLOCK = "SENTENCE RHYTHM (measured, and checked in code — for the writer):"
+
+
+def for_judge(spec_text: str) -> str:
+    """The voice spec without the rhythm block.
+
+    Rhythm is measured before the voice pass is called and reported to the
+    writer in words. The judge has no instrument for it and a long record of
+    getting it wrong — including scoring this brand's hand-written script 7.0
+    for the rhythm the brand actually writes in — so it is not shown the rules.
+    """
+    if not spec_text or RHYTHM_BLOCK not in spec_text:
+        return spec_text
+    before, after = spec_text.split(RHYTHM_BLOCK, 1)
+    remainder = after.split("\n\n", 1)
+    tail = remainder[1] if len(remainder) > 1 else ""
+    return (before.rstrip() + ("\n\n" + tail if tail.strip() else "")).strip()
+
+
+def brain_for_judge(brain: str) -> str:
+    """The whole Brand Brain as the voice pass should see it.
+
+    for_judge() above strips the rhythm block from the VOICE SPEC section, and
+    for four months that was believed to be enough. It was not: the judge's
+    prompt is also handed the entire Brain as BRAND METRICS, rhythm block and
+    all, so the rules were removed from one variable and supplied in full by
+    the next one. The judge went on quoting them — "the brand voice requires
+    variation in sentence length: 'Sentences are short, and not uniformly
+    short...'" — as the reason for refusing draft after draft.
+
+    The measured rates go too. Every comment around the voice pass says it is
+    given no rates and that this is the point, because handed the numbers the
+    judge faulted whichever one a draft had crossed: three rounds ordering a
+    script to join its sentences, then one ordering them split. That was true
+    of the variables built for it and false of the Brain it was sent.
+
+    What is left is what the judge is actually for: how this brand opens and
+    closes, the constructions it reaches for, its tone, what it may claim.
+    """
+    if not brain:
+        return brain
+    without_rates = re.sub(r"#\s*MEASURED MECHANICS\s*\n.*?(?=\n#\s+[A-Z]|\Z)", "",
+                           brain, flags=re.DOTALL)
+    return for_judge(without_rates).strip()
+
+
+def _rule_lines(spec: dict, split: bool = False):
+    """How this brand writes, in words. Deliberately without rates.
+
+    Every rule here used to carry the number it came from — "sentences run
+    about 7 words (typical range 7-8)", "34 in 100 sentences are under six
+    words". Handed a list of numbers, the judge could fault any draft against
+    one of them in some direction, and it did: three rounds telling a script to
+    join its sentences, then a fourth telling it to split them, because the
+    draft had crossed the band in between. A number you can cross is a target
+    to oscillate around, not a description of a voice.
+
+    What is left is what a writer can actually write to, and what a reader can
+    check by reading. The rates are still measured — they live in MEASURED
+    MECHANICS, where the deterministic checks use them — but they are not
+    quoted here and the voice pass never sees them.
+    """
+    bands, rules, rhythm = spec.get("bands", {}), [], []
+
+    def value(key, field="median"):
+        return bands.get(key, {}).get(field)
+
+    # Rhythm is described as a mix, because that is what the corpus is. Told
+    # only "sentences are short", the writer produced a script whose every line
+    # was four words long and read as a list of facts — while the corpus it was
+    # imitating runs a third of its sentences short, half at middling length and
+    # a sixth longer still. Flat is a failure even when every sentence is the
+    # right length on its own, so the description says so outright.
+    median_length = value("median_words_per_sentence")
+    short = value("share_sentences_under_6_words")
+    long_share = value("share_sentences_over_20_words")
+
+    if median_length is not None:
+        if median_length <= 8:
+            rhythm.append(
+                "Sentences are short, and not uniformly short. Clipped ones carry the action, and a "
+                "longer one arrives to carry a consequence or a detail before the writing clips back."
+            )
+        elif median_length <= 14:
+            rhythm.append(
+                "Sentences run to about a line — long enough to carry a clause, short enough to close "
+                "cleanly — with shorter ones cutting in."
+            )
+        else:
+            rhythm.append("Sentences run long, carrying several clauses before they close.")
+        rhythm.append(
+            "Vary them. A passage where every sentence is the same length reads as a list whatever "
+            "that length is, and that is the commonest way to get this voice wrong."
+        )
+    if short is not None and short > 25:
+        rhythm.append("Let a sentence end early when it has said its thing. Do not pad it out to match the others.")
+    if long_share is not None and long_share < 5:
+        rhythm.append("Sentences that run past twenty words are rare. Break them rather than join them.")
+
+    nominal = value("nominalisations_per_100_words")
+    if nominal is not None:
+        rules.append(
+            "Abstract nouns (-tion, -ment, -ance, -ity) are rare. Write what someone does, "
+            "not the name of the doing."
+            if nominal < 3 else
+            "Abstract nouns are part of how this brand writes; it names concepts as well as actions."
+        )
+    long_words = value("four_plus_syllable_words_per_100_words")
+    if long_words is not None and long_words < 7:
+        rules.append(
+            "Plain words. Where a long word appears it is the subject's own — a name, a term of "
+            "art — never a fancier way of saying a simple thing."
+        )
+    contractions = value("contractions_per_100_words")
+    if contractions is not None and contractions < 1:
+        rules.append("Contractions are rare outside dialogue.")
+    pronouns = value("share_sentences_opening_with_pronoun")
+    if pronouns is not None and pronouns > 30:
+        rules.append("Sentences usually open with their subject — 'He', 'They', the name — and state it first.")
+    dialogue = value("share_lines_that_are_dialogue")
+    if dialogue is not None and dialogue > 3:
+        rules.append("Dialogue appears, introduced by a speaker label on its own line.")
+
+    if split:
+        return rhythm, rules
+    return rhythm + rules
+
+    # share_single_sentence_paragraphs is measured and deliberately not reported.
+    # In a screenplay corpus it sits near 99 because screenplays are laid out one
+    # action per line — it describes the format, not the writing. Reported as a
+    # voice rule, it produced an instruction to reformat an entire script:
+    # "place each sentence on its own line, as its own paragraph."
+    return rules
+
+
+def _describe(shapes: list[str]) -> str:
+    """One sentence describing a beat, with consecutive repeats collapsed.
+
+    A numbered list of shapes reads as a form to fill in. The same information
+    as a sentence reads as what it is — a description of what the brand usually
+    does — which is all that was ever measured.
+    """
+    runs: list[tuple[str, int]] = []
+    for shape in shapes:
+        if runs and runs[-1][0] == shape:
+            runs[-1] = (shape, runs[-1][1] + 1)
+        else:
+            runs.append((shape, 1))
+    parts = []
+    for shape, count in runs:
+        if count == 1:
+            parts.append(shape)
+        elif count == 2:
+            parts.append(f"a couple of {_plural(shape)}")
+        else:
+            parts.append(f"{_COUNTS.get(count, str(count))} {_plural(shape)}")
+    if len(parts) == 1:
+        return parts[0] + "."
+    return ", then ".join(parts[:-1]) + ", then " + parts[-1] + "."
+
+
+_COUNTS = {2: "a couple", 3: "three", 4: "four", 5: "five", 6: "six"}
+
+
+def _plural(shape: str) -> str:
+    if shape.startswith("a "):
+        shape = shape[2:]
+    if shape.endswith("sentence"):
+        return shape + "s"
+    if shape.endswith("heading") or shape.endswith("line") or shape.endswith("title"):
+        return shape + "s"
+    return shape
+
+
+def render_spec(spec: dict, grammar: Optional[dict] = None) -> str:
+    """The VOICE SPEC section: how this brand writes, as rules and shapes."""
+    if not spec:
+        return ""
+    from utils.brand_fixtures import render_fixtures
+
+    if "bands" not in spec:
+        fixture_lines = render_fixtures(spec.get("fixtures") or {})
+        if not fixture_lines:
+            return ""
+        return "\n".join(["# VOICE SPEC (measured from this brand's own writing)", ""] + fixture_lines)
+    lines = [
+        "# VOICE SPEC (measured from this brand's own writing)",
+        "How this brand builds sentences, measured over its documents' prose — front matter, headings, scene "
+        "directions and appendices excluded. These are habits to write with, not numbers to hit: match the shapes "
+        "and the rates follow. Never lengthen or shorten a word to move a number, and never count words to match "
+        "a shape. Nothing here is a template: a piece that reads like this brand wrote it satisfies all of it, "
+        "and a piece assembled to match it line by line satisfies none of it.",
+        "",
+        "SENTENCE AND PARAGRAPH HABITS:",
+    ]
+    rhythm, rest = _rule_lines(spec, split=True)
+    lines += [f"- {rule}" for rule in rest]
+    if rhythm:
+        # Kept in a block of its own so the voice pass can be handed a spec
+        # without it. Told not to rule on rhythm but shown the rules anyway, a
+        # judge quoted this brand's own "not uniformly short" line back as the
+        # reason for refusing four drafts in a row. An instruction not to use
+        # information loses to the information.
+        lines += ["", RHYTHM_BLOCK]
+        lines += [f"- {rule}" for rule in rhythm]
+    for label, beat in (("OPENINGS", "opening"), ("CLOSINGS", "closing")):
+        shapes = (grammar or {}).get(beat) or []
+        if shapes:
+            lines += ["", f"HOW ITS {label} TEND TO GO: {_describe(shapes)}"]
+    if spec.get("transitions"):
+        lines += ["", f"TRANSITION MARKERS USED: {', '.join(spec['transitions'])}"]
+    if spec.get("speaker_labels"):
+        lines += [f"LINE LABELS USED: {', '.join(spec['speaker_labels'][:6])}"]
+    fixture_lines = render_fixtures(spec.get("fixtures") or {})
+    if fixture_lines:
+        lines += [""] + fixture_lines
+    lines += ["", f"MEASURED OVER: {spec.get('documents', 0)} document(s), {spec.get('prose_words', 0)} words of prose."]
+    return "\n".join(lines)
+
+
+def longest_shared_run(text: str, corpus: str) -> int:
+    """The longest run of consecutive words this text shares with the corpus."""
+    def words_of(value: str) -> list[str]:
+        # Quote marks are stripped from the ends of each token. Left on, they
+        # broke the comparison exactly where it mattered: a synthesis line
+        # naming "the 'He realizes that...' declarative phrase" tokenised its
+        # first word as "'he", which matches nothing, so a phrase quoted
+        # straight out of the corpus measured as a two-word overlap.
+        return [w for w in (t.strip("'’“”\"").lower() for t in _WORD.findall(value)) if w]
+
+    draft, source = words_of(text), words_of(corpus)
+    if not draft or not source:
+        return 0
+    source_starts: dict[str, list[int]] = {}
+    for index, word in enumerate(source):
+        source_starts.setdefault(word, []).append(index)
+    longest = 0
+    for i, word in enumerate(draft):
+        for j in source_starts.get(word, ()):
+            run = 0
+            while i + run < len(draft) and j + run < len(source) and draft[i + run] == source[j + run]:
+                run += 1
+            longest = max(longest, run)
+    return longest
+
+
+# ---------------------------------------------------------------------------
+#  Comparing a draft with the brand
+# ---------------------------------------------------------------------------
+# What each shape means when a draft sits outside the brand's own range. The
+# note says what the writing is doing, never a number to hit: told to raise a
+# four-syllable rate, a model reaches it with "convene" and "congregation".
+_DIAGNOSTIC_NOTES = {
+    "median_words_per_sentence": (
+        "Sentences are shorter than the brand's. They end before they say anything; let some run on to the "
+        "detail that matters.",
+        "Sentences are longer than the brand's. Split them: this brand states one thing per sentence."),
+    "nominalisations_per_100_words": (
+        "Fewer abstract nouns than the brand uses — usually fine; only a worry if the writing has gone telegraphic.",
+        "More abstract nouns than the brand uses. It is naming actions instead of performing them: "
+        "'demonstrates profound deference' where this brand writes 'bows'."),
+    "four_plus_syllable_words_per_100_words": (
+        "Plainer words than the brand's. Fine unless facts have been dropped to get there.",
+        "Longer words than the brand uses. Check each one is the subject's own word rather than a longer way "
+        "of saying a plain one."),
+    "share_sentences_under_6_words": (
+        "Fewer very short sentences than the brand writes. Some beats should land in three words.",
+        "More very short sentences than the brand writes. Strung together they read as a list, not a scene."),
+    "contractions_per_100_words": (
+        "Fewer contractions than the brand uses; the writing has gone formal.",
+        "More contractions than the brand uses."),
+}
+
+
+def _band_from_metrics(metrics: str, key: str) -> Optional[dict]:
+    values = {}
+    for suffix, field in (("", "median"), ("_low", "low"), ("_high", "high")):
+        match = re.search(rf"^-\s*{re.escape(key)}{suffix}:\s*([0-9.]+)\s*$", metrics, re.M)
+        if match:
+            values[field] = float(match.group(1))
+    if "median" not in values:
+        return None
+    values.setdefault("low", values["median"])
+    values.setdefault("high", values["median"])
+    return values
+
+
+
+def _enough_evidence(measured: dict, key: str, actual: float, low: float, high: float) -> bool:
+    """Whether a rate difference is more than the noise of a short draft.
+
+    Counts vary with the square root of their own size, so a draft of ninety
+    words that happens to contain two abstractions is 2.2 per 100 against a
+    brand's 0.9 and means nothing. The same rule the mechanics check uses.
+    """
+    words = measured.get("words", 0)
+    if not words:
+        return False
+    target = low if actual < low else high
+    expected = target * words / 100.0
+    seen = actual * words / 100.0
+    bar = max(2.0, 2.0 * (expected ** 0.5))
+    return abs(seen - expected) >= bar
+
+# A draft with less than this share of the brand's own sentence-length
+# variation is flat. Not the brand's range, which for this corpus is 3.38-3.49
+# and would condemn its own gold script at 2.7 — a hand-written retelling is
+# tighter than a full screenplay and right to be. What separates it from the
+# drafts that shipped wrongly is a gap, not a band: those sit at 1.5 and 1.8,
+# under half the brand's variation, while the gold keeps four fifths of it.
+FLAT_SHARE = 0.6
+
+
+def flatness_note(draft: str, metrics: str) -> str:
+    """Whether this draft's sentences barely move, in words rather than a rate."""
+    typical = _band_from_metrics(metrics, "words_per_sentence_variation")
+    if not typical or not typical.get("median"):
+        return ""
+    measured = shape_metrics(prose_only(draft) or draft)
+    # Zero is a measurement, not a missing one — a draft whose every sentence is
+    # the same length is the flattest a draft can be, and the first version of
+    # this check let exactly that through by treating 0.0 as "nothing measured".
+    if not measured or measured.get("sentences", 0) < 10:
+        return ""
+    actual = measured.get("words_per_sentence_variation", 0.0)
+    if actual >= typical["median"] * FLAT_SHARE:
+        return ""
+    return (
+        "Sentence rhythm is flat: the sentences here are nearly all the same length, where this "
+        "brand's move between clipped ones and longer ones. Let a sentence run on to the detail "
+        "or the consequence that matters, then clip back. Do not lengthen everything — that is "
+        "the same fault the other way."
+    )
+
+
+def band_high(metrics: str, key: str) -> float:
+    """The top of the brand's own range for one measurement, or 0.0 if unmeasured."""
+    band_values = _band_from_metrics(metrics, key)
+    return float(band_values["high"]) if band_values else 0.0
+
+
+# The measurements a judge can be asked to rule on, and what each one is called
+# when it is spoken about rather than named.
+_DIRECTION_LABELS = {
+    "median_words_per_sentence": "sentence length",
+    "share_sentences_under_6_words": "how often sentences end early",
+    "nominalisations_per_100_words": "abstraction",
+    "four_plus_syllable_words_per_100_words": "word length",
+    "contractions_per_100_words": "contractions",
+}
+
+
+def voice_directions(draft: str, metrics: str) -> list[str]:
+    """Which way each measurement may move, if at all — stated as the authority.
+
+    The voice pass used to be handed the spec and asked for rewrites free-hand,
+    and the spec truthfully says two things that pull opposite ways: sentences
+    run about seven words, and a third of them end before six. So one round told
+    a draft its sentences were too choppy and rewrote five passages into longer
+    ones; the writer complied; and the next round took the sentence it had just
+    asked for and split it back into three. Eight rounds, no convergence, and a
+    piece that ended unapproved while both verdicts were individually defensible.
+
+    What was missing is not more guidance — it is knowing which way this draft
+    is actually wrong. A measurement inside the brand's own range is settled,
+    and nothing about it is up for discussion.
+    """
+    prose = prose_only(draft) or draft
+    measured = shape_metrics(prose)
+    if not measured:
+        return []
+    directions = []
+    for key, label in _DIRECTION_LABELS.items():
+        band_values = _band_from_metrics(metrics, key)
+        if not band_values or key not in measured:
+            continue
+        actual, low, high = measured[key], band_values["low"], band_values["high"]
+        if low <= actual <= high:
+            verdict = ("SETTLED — inside the brand's own range. Do not ask for it to change in "
+                       "either direction, and do not raise it as a fault.")
+        elif actual < low:
+            # Deliberately not an instruction. Run against the hand-written
+            # correct version of a script, this measurement reports shorter
+            # sentences, plainer words and fewer abstractions than the brand's
+            # corpus — all three — because that version is clipped on purpose
+            # and the corpus includes its own commentary. A judge told to fix
+            # that would talk the right answer out of the writer.
+            verdict = ("BELOW the brand's range. You may ask for changes that raise it; you may "
+                       "never ask for changes that lower it further. Plainer or shorter than the "
+                       "brand is not a fault by itself — raise it only if something is missing, "
+                       "unclear, or reads as a list rather than prose.")
+        else:
+            verdict = ("ABOVE the brand's range. You may ask for changes that lower it; you may "
+                       "never ask for changes that raise it further.")
+        directions.append(f"{label}: this draft {actual:g}, brand {low:g}-{high:g}. {verdict}")
+    if not directions:
+        return []  # nothing measured for this brand, so nothing is ruled in or out
+    return ["These are not instructions to change anything. They are limits on what you are "
+            "allowed to ask for."] + directions
+
+
+def voice_diagnostics(draft: str, metrics: str) -> list[str]:
+    """Where a draft's shapes sit outside the brand's own range, in words rather than targets.
+
+    Advisory by design. These used to be blocking rules with a number attached,
+    and a draft chased that number round the revision loop: 2.9, then 23.5, then
+    1.5, then padded with long words until it passed and read like nobody.
+    """
+    prose = prose_only(draft) or draft
+    measured = shape_metrics(prose)
+    if not measured:
+        return []
+    notes = []
+    for key, (below, above) in _DIAGNOSTIC_NOTES.items():
+        band_values = _band_from_metrics(metrics, key)
+        if not band_values or key not in measured:
+            continue
+        actual, low, high = measured[key], band_values["low"], band_values["high"]
+        # A margin outside the brand's own spread, so ordinary variation is quiet.
+        margin = max((high - low) * 0.5, band_values["median"] * 0.25, 0.3)
+        label = key.replace("_per_100_words", "").replace("_", " ")
+        if key.endswith("_per_100_words") and not _enough_evidence(measured, key, actual, low, high):
+            continue  # two occurrences in ninety words is variance, not a voice
+        if actual < low - margin:
+            notes.append(f"{label}: brand {low:g}–{high:g}, this draft {actual:g}. {below}")
+        elif actual > high + margin:
+            notes.append(f"{label}: brand {low:g}–{high:g}, this draft {actual:g}. {above}")
+    return notes
+
+
+# Headings a brief, treatment or strategy deck uses to organise itself. A piece
+# of published writing does not carry a section called CHARACTERS or KEY
+# MESSAGES; a document planning one does.
+# Matched word by word, because these headings are rarely bare: the treatment
+# that prompted this carried "LOGLINE (draft - to be refined as more of the
+# story is added)" and "CHARACTER PROFILES", neither of which equals anything a
+# fixed list would hold.
+_BRIEF_HEADINGS = frozenset({
+    "logline", "synopsis", "premise", "treatment", "brief", "character",
+    "characters", "objective", "objectives", "audience", "messages",
+    "messaging", "deliverables", "themes", "background", "summary",
+    "overview", "assumptions", "scope", "beats", "outline", "continuation",
+    "genre", "positioning", "rationale", "requirements", "specification",
+})
+
+# The register of a document describing writing rather than being it.
+_PLANNING_PHRASES = (
+    "may be developed", "will be developed", "function more as", "at this stage",
+    "the goal is", "we want", "the aim is", "should feel", "should read",
+    "needs to", "the reader should", "the viewer should", "to be decided",
+    "tbd", "placeholder", "for now", "further developed", "in future episodes",
+)
+
+
+def looks_like_a_brief(text: str) -> bool:
+    """Whether a document reads as planning for writing rather than writing.
+
+    Tagged as brand voice, a treatment teaches the Brain the wrong thing twice
+    over: its section titles become "brand assets" the writer is told it may
+    use, and its explanatory register sets the targets the writer aims at. Four
+    screenplays and one treatment produced a script ordered to reuse another
+    story's act titles.
+
+    Advisory only. Plenty of brands publish documents that look like this, and
+    only the person uploading knows which they have — so this warns and the
+    upload proceeds.
+    """
+    if not text or len(text) < 200:
+        return False
+    lines = [l.strip() for l in text.splitlines() if l.strip()]
+    if not lines:
+        return False
+
+    def is_brief_heading(line: str) -> bool:
+        if not _is_heading(line):
+            return False
+        head = re.split(r"[(—–-]", line.strip(" #*:-").lower())[0]
+        return any(word in _BRIEF_HEADINGS for word in re.findall(r"[a-z]+", head))
+
+    headings = sum(1 for line in lines if is_brief_heading(line))
+    lowered = text.lower()
+    phrases = sum(1 for phrase in _PLANNING_PHRASES if phrase in lowered)
+    bullets = sum(1 for line in lines if line[:1] in "-*•" or re.match(r"\d+[.)]\s", line))
+
+    # Two independent signals, so a published piece with one list or one
+    # "Summary" heading is not second-guessed.
+    signals = (headings >= 2) + (phrases >= 3) + (bullets > len(lines) * 0.4)
+    return signals >= 2
