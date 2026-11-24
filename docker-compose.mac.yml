@@ -1,0 +1,46 @@
+# Mac-sized overrides for docker-compose.yml, for running the whole app on one
+# Apple Silicon Mac with ~8 GB given to Docker. Selected by COMPOSE_FILE in .env.
+#
+# docker-compose.yml is sized for a server (about 28 worker processes); here each
+# queue gets one or two, which is plenty for a team of about five. Ports are bound
+# to 127.0.0.1 so Postgres, Redis and the API are not open to the rest of the
+# network; the public address comes from Cloudflare Tunnel, which connects to
+# localhost:8000.
+
+services:
+  postgres:
+    ports: !override
+      - "127.0.0.1:5433:5432"
+
+  redis:
+    ports: !override
+      - "127.0.0.1:6379:6379"
+
+  api:
+    command: uvicorn main:app --host 0.0.0.0 --port 8000 --workers 2
+    ports: !override
+      - "127.0.0.1:8000:8000"
+
+  worker_generation:
+    command: celery -A celery_task worker --queues generation --concurrency 2 --loglevel info
+    deploy:
+      replicas: 1
+
+  worker_feedback:
+    command: celery -A celery_task worker --queues feedback --concurrency 1 --loglevel info
+
+  worker_retraining:
+    command: celery -A celery_task worker --queues retraining --concurrency 1 --loglevel info
+
+  worker_rag:
+    command: celery -A celery_task worker --queues rag_refresh --concurrency 1 --loglevel info
+
+  # Rendering is the slowest step; on the Mac it can use more than the server's 1.5 CPUs.
+  worker_render:
+    cpus: 4
+
+  # Celery monitoring. Off by default; start it with: docker compose --profile monitoring up -d flower
+  flower:
+    profiles: ["monitoring"]
+    ports: !override
+      - "127.0.0.1:5555:5555"

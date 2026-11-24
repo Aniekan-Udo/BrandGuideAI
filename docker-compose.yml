@@ -6,6 +6,10 @@ services:
 
   postgres:
     image: pgvector/pgvector:pg16
+    # Load the whole .env so model provider settings and API keys reach the
+    # container. The explicit environment block below still wins.
+    env_file:
+      - .env
     environment:
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
@@ -31,36 +35,6 @@ services:
       timeout: 5s
       retries: 5
 
-  rabbitmq:
-    image: rabbitmq:3.11-alpine
-    ports:
-      - "5672:5672"
-    healthcheck:
-      test: ["CMD", "rabbitmq-diagnostics", "ping"]
-      interval: 10s
-      timeout: 10s
-      retries: 10
-      start_period: 30s
-
-  # ---------------------------------------------------------------------------
-  # Embedding Init (runs once before workers start)
-  # ---------------------------------------------------------------------------
-
-  embedding_init:
-    build: .
-    user: root
-    command: >
-      sh -c "mkdir -p /tmp/fastembed_cache &&
-            chmod 777 /tmp/fastembed_cache &&
-            python -c \"from fastembed import TextEmbedding; TextEmbedding('BAAI/bge-small-en-v1.5')\""
-    environment:
-      SECRET_KEY: ${SECRET_KEY}
-      FRONTEND_URL: https://brandmuse-ai-eta.vercel.app
-      FASTEMBED_CACHE_PATH: /tmp/fastembed_cache
-    volumes:
-      - fastembed_cache:/tmp/fastembed_cache
-    restart: "no"
-
   # ---------------------------------------------------------------------------
   # Application
   # ---------------------------------------------------------------------------
@@ -70,28 +44,26 @@ services:
     command: uvicorn main:app --host 0.0.0.0 --port 8000 --workers 4
     ports:
       - "8000:8000"
+    # Load the whole .env so model provider settings and API keys reach the
+    # container. The explicit environment block below still wins.
+    env_file:
+      - .env
     environment:
-      GROQ_API_KEY: ${GROQ_API_KEY}
-      GOOGLE_API_KEY: ${GOOGLE_API_KEY}
-      POSTGRES_URI: ${POSTGRES_URI}
-      REDIS_URL: ${REDIS_URL}
-      RABBIT_URL: ${RABBIT_URL}
-      TAVILY_API_KEY: ${TAVILY_API_KEY}
+      PARALLEL_API_KEY: ${PARALLEL_API_KEY}
+      POSTGRES_URI: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      REDIS_URL: redis://redis:6379/0
       SECRET_KEY: ${SECRET_KEY}
-      FRONTEND_URL: https://brandmuse-ai-eta.vercel.app
-      FASTEMBED_CACHE_PATH: /tmp/fastembed_cache
+      FRONTEND_URL: ${FRONTEND_URL}
     volumes:
-      - fastembed_cache:/tmp/fastembed_cache
       - ./static:/app/static
+      - fastembed_cache:/app/.cache/fastembed
+      # YouTube Automation files when YT_GCS_BUCKET is not set; shared with worker_youtube.
+      - yt_storage:/app/.yt_storage
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
-      rabbitmq:
-        condition: service_healthy
-      embedding_init:
-        condition: service_completed_successfully
     restart: unless-stopped
 
   worker_generation:
@@ -99,93 +71,140 @@ services:
     command: celery -A celery_task worker --queues generation --concurrency 8 --loglevel info
     deploy:
       replicas: 2
+    # Load the whole .env so model provider settings and API keys reach the
+    # container. The explicit environment block below still wins.
+    env_file:
+      - .env
     environment:
       PYTHONPATH: /app
-      GROQ_API_KEY: ${GROQ_API_KEY}
-      GOOGLE_API_KEY: ${GOOGLE_API_KEY}
-      POSTGRES_URI: ${POSTGRES_URI}
-      REDIS_URL: ${REDIS_URL}
-      RABBIT_URL: ${RABBIT_URL}
-      TAVILY_API_KEY: ${TAVILY_API_KEY}
+      PARALLEL_API_KEY: ${PARALLEL_API_KEY}
+      POSTGRES_URI: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      REDIS_URL: redis://redis:6379/0
       SECRET_KEY: ${SECRET_KEY}
-      FRONTEND_URL: https://brandmuse-ai-eta.vercel.app
-      FASTEMBED_CACHE_PATH: /tmp/fastembed_cache
+      FRONTEND_URL: ${FRONTEND_URL}
     volumes:
-      - fastembed_cache:/tmp/fastembed_cache
+      - fastembed_cache:/app/.cache/fastembed
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
-      rabbitmq:
-        condition: service_healthy
-      embedding_init:
-        condition: service_completed_successfully
     restart: unless-stopped
 
   worker_feedback:
     build: .
     command: celery -A celery_task worker --queues feedback --concurrency 8 --loglevel info
+    # Load the whole .env so model provider settings and API keys reach the
+    # container. The explicit environment block below still wins.
+    env_file:
+      - .env
     environment:
-      GROQ_API_KEY: ${GROQ_API_KEY}
-      GOOGLE_API_KEY: ${GOOGLE_API_KEY}
-      POSTGRES_URI: ${POSTGRES_URI}
-      REDIS_URL: ${REDIS_URL}
-      RABBIT_URL: ${RABBIT_URL}
-      TAVILY_API_KEY: ${TAVILY_API_KEY}
+      PARALLEL_API_KEY: ${PARALLEL_API_KEY}
+      POSTGRES_URI: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      REDIS_URL: redis://redis:6379/0
+    volumes:
+      - fastembed_cache:/app/.cache/fastembed
     depends_on:
       postgres:
         condition: service_healthy
       redis:
-        condition: service_healthy
-      rabbitmq:
         condition: service_healthy
     restart: unless-stopped
 
   worker_retraining:
     build: .
     command: celery -A celery_task worker --queues retraining --concurrency 2 --loglevel info
+    # Load the whole .env so model provider settings and API keys reach the
+    # container. The explicit environment block below still wins.
+    env_file:
+      - .env
     environment:
-      GROQ_API_KEY: ${GROQ_API_KEY}
-      GOOGLE_API_KEY: ${GOOGLE_API_KEY}
-      POSTGRES_URI: ${POSTGRES_URI}
-      REDIS_URL: ${REDIS_URL}
-      RABBIT_URL: ${RABBIT_URL}
-      TAVILY_API_KEY: ${TAVILY_API_KEY}
+      PARALLEL_API_KEY: ${PARALLEL_API_KEY}
+      POSTGRES_URI: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      REDIS_URL: redis://redis:6379/0
+    volumes:
+      - fastembed_cache:/app/.cache/fastembed
     depends_on:
       postgres:
         condition: service_healthy
       redis:
-        condition: service_healthy
-      rabbitmq:
         condition: service_healthy
     restart: unless-stopped
 
   worker_rag:
     build: .
     command: celery -A celery_task worker --queues rag_refresh --concurrency 2 --loglevel info
+    # Load the whole .env so model provider settings and API keys reach the
+    # container. The explicit environment block below still wins.
+    env_file:
+      - .env
     environment:
       PYTHONPATH: /app
-      GROQ_API_KEY: ${GROQ_API_KEY}
-      GOOGLE_API_KEY: ${GOOGLE_API_KEY}
-      POSTGRES_URI: ${POSTGRES_URI}
-      REDIS_URL: ${REDIS_URL}
-      RABBIT_URL: ${RABBIT_URL}
-      TAVILY_API_KEY: ${TAVILY_API_KEY}
+      PARALLEL_API_KEY: ${PARALLEL_API_KEY}
+      POSTGRES_URI: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      REDIS_URL: redis://redis:6379/0
       SECRET_KEY: ${SECRET_KEY}
-      FRONTEND_URL: https://brandmuse-ai-eta.vercel.app
-      FASTEMBED_CACHE_PATH: /tmp/fastembed_cache
+      FRONTEND_URL: ${FRONTEND_URL}
     volumes:
-      - fastembed_cache:/tmp/fastembed_cache
+      - fastembed_cache:/app/.cache/fastembed
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
-      rabbitmq:
+    restart: unless-stopped
+
+  # YouTube Automation worker. Optional: it only starts with the "youtube"
+  # profile, and the deploy workflow does not start it, so marketing deploys
+  # are unaffected. Start it with:
+  #   docker compose --profile youtube up -d --build worker_youtube
+  # Concurrency 1 keeps one voice model in memory (~1 GB while voicing).
+  worker_youtube:
+    profiles: ["youtube"]
+    build: .
+    command: celery -A youtube.tasks worker --queues yt_plan,yt_media,yt_publish --concurrency 1 --loglevel info
+    env_file:
+      - .env
+    environment:
+      PYTHONPATH: /app
+      POSTGRES_URI: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      REDIS_URL: redis://redis:6379/0
+    volumes:
+      - kokoro_models:/app/.cache/kokoro
+      - yt_storage:/app/.yt_storage
+    depends_on:
+      postgres:
         condition: service_healthy
-      embedding_init:
-        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # YouTube Automation render worker: talking-head clips and ffmpeg composition.
+  # CPU-heavy, so it has its own profile and is meant for a machine other than
+  # the production VM (docs/youtube-automation.md, section 9). It needs the same
+  # storage as the API: set YT_GCS_BUCKET, or run it beside the API to share yt_storage.
+  #   docker compose --profile render up -d --build worker_render
+  worker_render:
+    profiles: ["render"]
+    build:
+      context: .
+      target: render
+    command: celery -A youtube.tasks worker --queues yt_render --concurrency 1 --loglevel info
+    env_file:
+      - .env
+    environment:
+      PYTHONPATH: /app
+      POSTGRES_URI: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      REDIS_URL: redis://redis:6379/0
+    volumes:
+      - yt_storage:/app/.yt_storage
+    # Leave CPU for the API if this ever runs on the same machine.
+    cpus: 1.5
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
     restart: unless-stopped
 
   flower:
@@ -193,17 +212,24 @@ services:
     command: celery -A celery_task flower --port=5555
     ports:
       - "5555:5555"
+    # Load the whole .env so model provider settings and API keys reach the
+    # container. The explicit environment block below still wins.
+    env_file:
+      - .env
     environment:
-      REDIS_URL: ${REDIS_URL}
-      POSTGRES_URI: ${POSTGRES_URI}
-      RABBIT_URL: ${RABBIT_URL}
+      REDIS_URL: redis://redis:6379/0
+      POSTGRES_URI: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
     depends_on:
       redis:
-        condition: service_healthy
-      rabbitmq:
         condition: service_healthy
     restart: unless-stopped
 
 volumes:
   postgres_data:
+  # The local embedding model (EMBEDDING_PROVIDER=local), shared by every
+  # service and kept across redeploys so it downloads once.
   fastembed_cache:
+  # YouTube Automation: the Kokoro voice model, and files kept on disk when no
+  # storage bucket is configured.
+  kokoro_models:
+  yt_storage:

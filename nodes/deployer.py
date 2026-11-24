@@ -1,25 +1,46 @@
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 
 logger = logging.getLogger(__name__)
-from learning_memory import FeedbackPortSQL
 from graph.state import GraphState
 from database import get_db_session, Generation
 from utils.observe import observe
 
-PROMOTION_THRESHOLD = 8.5
-
 
 @observe("deployer_node")
-def deployer_node(state: GraphState, memory: FeedbackPortSQL) -> GraphState:
+def deployer_node(state: GraphState) -> GraphState:
+    from graph.deps import resolve_deps
+    _rag, _analyzer, memory = resolve_deps(state["business_id"], state["content_type"])
+
     generation_id = state["generation_id"]
     score = state.get("score", 0.0)
+
+    # An unapproved run delivers its best round, not its last one. Revision
+    # wanders: one run scored 6.3, 6.3, 7.5, 7.5, 6.0 before running out, and
+    # the draft it handed over was the 6.0 — which had also lost a fact the 7.5
+    # still carried correctly. Approved content is never substituted: the
+    # approval belongs to the draft that earned it.
+    best = state.get("best_content")
+    if not state.get("approved") and best and best != state.get("content"):
+        best_score = float(state.get("best_score") or 0.0)
+        if best_score > float(score or 0.0):
+            logger.info(
+                "Delivering the best draft of this run: iteration %s scored %.1f, "
+                "the last scored %.1f",
+                state.get("best_iteration"), best_score, float(score or 0.0),
+            )
+            state = {**state, "content": best, "score": best_score}
+            score = best_score
+    # The enforcer's verdict, stored separately from status: a draft saved
+    # because the revision loop ran out of rounds is completed, not approved.
+    approved = bool(state.get("approved", False))
     logger.info("DEPLOYER NODE: received content of length %s", len(state.get("content", "")))
 
     # Persist to DB
     with get_db_session() as session:
         from sqlalchemy.dialects.postgresql import insert as pg_insert
 
+        completed_at = datetime.now(timezone.utc)
         stmt = pg_insert(Generation).values(
             generation_id=generation_id,
             business_id=state["business_id"],
@@ -29,15 +50,20 @@ def deployer_node(state: GraphState, memory: FeedbackPortSQL) -> GraphState:
             user_id=state.get("user_id"),
             status="completed",
             score=score,
+            approved=approved,
             content=state["content"],
-            completed_at=datetime.utcnow()
+            # Carried from the rejected draft this run was triggered by, so the
+            # reviewer who wrote the feedback can see what it produced.
+            parent_generation_id=state.get("parent_generation_id") or None,
+            completed_at=completed_at
         ).on_conflict_do_update(
             index_elements=["generation_id"],
             set_={
                 "status": "completed",
                 "score": score,
+                "approved": approved,
                 "content": state["content"],
-                "completed_at": datetime.utcnow()
+                "completed_at": completed_at
             }
         )
         session.execute(stmt)
@@ -56,7 +82,11 @@ def deployer_node(state: GraphState, memory: FeedbackPortSQL) -> GraphState:
         style_match=state.get("style_match", 0.0),
         tone_match=state.get("tone_match", 0.0),
         structure_match=state.get("structure_match", 0.0),
-        signature_match=state.get("signature_match", 0.0)
+        signature_match=state.get("signature_match", 0.0),
+        # Recorded so a later rejection can re-run this generation the same way
+        # it was originally run, and so the reject -> regenerate loop is bounded.
+        use_search=bool(state.get("use_search", False)),
+        regeneration_depth=int(state.get("regeneration_depth") or 0)
     )
 
     # Notify user for review if webhook_url provided
@@ -74,26 +104,21 @@ def deployer_node(state: GraphState, memory: FeedbackPortSQL) -> GraphState:
         except Exception as e:
             logger.warning("Failed to queue notification for generation_id=%s: %s", generation_id, e)
 
-    # Promote high-scoring generations to brand_metrics to improve future generations
-    if score >= PROMOTION_THRESHOLD:
-        try:
-            from celery_task import promote_generation_feedback
-            promote_generation_feedback.delay(
-                business_id=state["business_id"],
-                content_type=state["content_type"],
-                generation_content=state["content"],
-                human_approved=False,
-                score=score
-            )
-            logger.info(
-                "Promoted generation to brand_metrics generation_id=%s score=%.1f",
-                generation_id, score
-            )
-        except Exception as e:
-            logger.warning(
-                "Failed to promote generation generation_id=%s: %s", generation_id, e
-            )
-
+    # High-scoring generations are NOT promoted into the Brand Brain. The Brain
+    # states how this brand writes, and it is derived from the documents the
+    # brand uploaded. A generation is this system's own output: feeding it back
+    # let one piece redefine the brand, and the drift compounded because each
+    # new generation re-extracted the previous one's inventions. Observed live:
+    # a tortoise-and-hare script taught a documentary studio that it valued
+    # "mindfulness", that its metaphors came from "classic fables", and that its
+    # authority rested on "an old storyteller" rather than on 11 years and 71
+    # commissions.
+    #
+    # Approval still teaches — through memory.save() above and the reviewer's
+    # notes, which reach the writer as approved/rejected angles with their
+    # reasoning (learning_memory.get_patterns -> nodes/writer.py). That is the
+    # right destination: approving a piece endorses the piece, it does not
+    # assert a new voice rule for the brand.
     logger.info(
         "Generation complete generation_id=%s score=%.1f iterations=%d",
         generation_id, score, state.get("iteration", 1)
