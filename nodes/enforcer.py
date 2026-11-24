@@ -1,193 +1,350 @@
 # nodes/enforcer.py
-import json
+"""The Enforcer: scores a draft against the Brand Brain and gates what ships.
+
+Deterministic checks live in utils.enforcement — they are the rules that can be
+decided by inspection once the brand's own habits are known, so they run before
+any model call and their verdicts are re-applied in code afterwards rather than
+trusted to the model's own compliance.
+"""
 import logging
 import re
-from model import LLMSingleton
-from brand_metrics import BrandMetricsSQL
-from brand_rag import BrandRAG
-from prompts.enforcer import ENFORCER_PROMPT
+
 from graph.state import GraphState
+from model import LLMSingleton
+from schema import is_narrative
+from prompts.enforcer import ENFORCER_HUMAN_DIRECTIVE, ENFORCER_PROMPT
+from utils.brand_profile import (
+    brand_brain_is_usable,
+    brand_name_evidence,
+    extract_permitted_claims,
+)
+from utils.enforcement import (
+    MAX_ITERATIONS,
+    MAX_VERBATIM_SPAN_WORDS,
+    find_altered_quotations,
+    find_extractive_spans,
+    find_unbranded_emphasis_caps,
+    source_quotation_for_span,
+    find_ungrounded_contact_details,
+    find_unverified_quote_attributions,
+    run_preflight_checks,
+    sanitize_banned_punctuation,
+    sanitize_unbranded_emphasis_caps,
+)
+from utils.coverage import dropped_detail
+from utils.fact_spans import extract_fact_spans, missing_fact_spans
+from utils.llm_output import parse_llm_json
+from utils.observe import observe
 
 logger = logging.getLogger(__name__)
 
-from utils.observe import observe
+
+def _provider_errors() -> tuple:
+    """Errors that mean the judge's provider could not answer (see utils.provider_errors)."""
+    from utils.provider_errors import provider_errors
+
+    return provider_errors()
 
 
-# def _parse_llm_json(raw: str) -> dict:
-#     """Strip markdown fences and parse JSON from LLM output."""
-#     raw = raw.strip()
-#     if raw.startswith("```"):
-#         raw = raw.split("```")[1]
-#         if raw.startswith("json"):
-#             raw = raw[4:]
-#     return json.loads(raw.strip())
+def _judge_unavailable(state, content, carried_findings, prior_violations,
+                       max_iterations, exc) -> GraphState:
+    """End the run with the best draft so far when the judge cannot be reached.
 
-def _parse_llm_json(raw: str) -> dict:
-    """Strip markdown fences and parse JSON from LLM output."""
-    raw = raw.strip()
-    match = re.search(r"```(?:json)?\s*(.*?)```", raw, re.DOTALL)
-    if match:
-        raw = match.group(1)
-    return json.loads(raw.strip())
+    Observed: on Groq's free tier the third round's judge request exceeded the
+    tokens-per-minute limit (HTTP 413). The exception escaped the graph and the
+    whole generation failed, discarding three drafts, two of which had already
+    been judged. A judge outage says nothing about the draft, so it ends the
+    run rather than the generation.
 
-
-def _extract_permitted_claims(metrics: str) -> str:
+    Every draft that reaches the judge has passed the deterministic gates above
+    it, unless a finding was carried past them. A draft with no carried finding
+    is the latest response to the judge's feedback and is delivered; one with a
+    carried finding gives way to the best round the judge did see. Either way
+    it is marked unapproved and unscored for voice, so a reviewer reads it
+    before it ships; the max-iteration force-approval is never reached.
     """
-    Extract the BRAND ASSET BANK section from the brand brain and format it
-    as an explicit closed list of permitted claims for the hallucination check.
+    reason = f"{type(exc).__name__}: {str(exc)[:300]}"
+    previous = state.get("best_content")
+    use_previous = bool(carried_findings) and bool(previous)
+    delivered = previous if use_previous else content
+    score = float(state.get("best_score") or 0.0) if use_previous else 0.0
 
-    This converts the unstructured asset bank text into a numbered whitelist
-    so the enforcer LLM can do exact lookup rather than relying on recall.
-    Returns a formatted string ready for prompt injection.
-    """
-    # Extract the BRAND ASSET BANK section
-    match = re.search(
-        r"#\s*BRAND ASSET BANK\s*\n(.*?)(?=\n#\s+[A-Z]|\Z)",
-        metrics,
-        re.DOTALL | re.IGNORECASE
+    logger.error(
+        "Judge unavailable at iteration %s — ending the run with %s draft (%s)",
+        state.get("iteration"), "the best judged" if use_previous else "this round's", reason,
     )
-    if not match:
-        return (
-            "No asset bank extracted yet. "
-            "All specific numeric claims (client counts, percentages, ROI figures) "
-            "in the content are UNVERIFIABLE and must be treated as hallucinations. "
-            "Flag any specific number tied to brand experience."
-        )
-
-    asset_text = match.group(1).strip()
-
-    # Parse individual claim lines — handle both bullet and dash formats
-    lines = [l.strip().lstrip("-•*").strip() for l in asset_text.splitlines() if l.strip()]
-
-    # Separate into categories for clarity
-    social_proof     = []
-    frameworks       = []
-    values           = []
-    financial_targets = []
-    other            = []
-
-    current_category = None
-    for line in lines:
-        upper = line.upper()
-        if "SOCIAL PROOF" in upper:
-            current_category = "social_proof"
-            continue
-        elif "FRAMEWORK" in upper or "METHODOLOG" in upper:
-            current_category = "frameworks"
-            continue
-        elif "VALUE" in upper or "BELIEF" in upper:
-            current_category = "values"
-            continue
-        elif "FINANCIAL TARGET" in upper or "PROJECTION" in upper:
-            current_category = "financial_targets"
-            continue
-        elif line.startswith("#") or (line.isupper() and len(line) > 5):
-            current_category = "other"
-            continue
-
-        if not line or line.startswith("#"):
-            continue
-
-        if current_category == "social_proof":
-            social_proof.append(line)
-        elif current_category == "frameworks":
-            frameworks.append(line)
-        elif current_category == "values":
-            values.append(line)
-        elif current_category == "financial_targets":
-            financial_targets.append(line)
-        else:
-            other.append(line)
-
-    sections = []
-
-    if social_proof:
-        numbered = "\n".join(f"  {i+1}. {c}" for i, c in enumerate(social_proof))
-        sections.append(f"PERMITTED SOCIAL PROOF CLAIMS (exact numbers the brand may claim):\n{numbered}")
-
-    if financial_targets:
-        numbered = "\n".join(f"  {i+1}. {c}" for i, c in enumerate(financial_targets))
-        sections.append(
-            f"PERMITTED FINANCIAL TARGETS & PROJECTIONS (specific numbers, percentages, dollar amounts, "
-            f"timeframes, and quantified outcomes the brand may use):\n{numbered}"
-        )
-
-    if frameworks:
-        numbered = "\n".join(f"  {i+1}. {c}" for i, c in enumerate(frameworks))
-        sections.append(f"PERMITTED FRAMEWORKS & METHODOLOGIES:\n{numbered}")
-
-    if values:
-        numbered = "\n".join(f"  {i+1}. {c}" for i, c in enumerate(values))
-        sections.append(f"PERMITTED STATED VALUES & BELIEFS:\n{numbered}")
-
-    if other:
-        numbered = "\n".join(f"  {i+1}. {c}" for i, c in enumerate(other))
-        sections.append(f"OTHER PERMITTED CLAIMS:\n{numbered}")
-
-    if not sections:
-        return (
-            "Asset bank found but could not be parsed into discrete claims. "
-            "Treat ALL specific numeric claims in the content as unverified "
-            "unless they appear verbatim in the brand metrics text above."
-        )
-
-    header = (
-        "The following is the COMPLETE list of specific claims this brand is permitted to make.\n"
-        "Any specific number, percentage, client count, or named framework NOT on this list "
-        "is a hallucination and must be flagged. EXCEPTION: numbers that appear verbatim in "
-        "the PERMITTED FINANCIAL TARGETS & PROJECTIONS list are always allowed.\n\n"
-    )
-    return header + "\n\n".join(sections)
-
-def _run_preflight_checks(content: str, metrics: str) -> list[str]:
-    """Run deterministic rule checks to catch strict anti-patterns before invoking the LLM."""
-    failures = []
-    
-    # 1. Check Punctuation
-    punctuation_match = re.search(r"PUNCTUATION HABITS:\n(.*?)(?=\n[A-Z_]+:|\n#|\Z)", metrics, re.DOTALL | re.IGNORECASE)
-    if punctuation_match:
-        rules = punctuation_match.group(1).lower()
-        if "avoid" in rules or "not used" in rules or "absent" in rules:
-            if "exclamation" in rules and "!" in content:
-                failures.append("Brand avoids exclamation marks (!), but they were found.")
-            if "em dash" in rules or "em-dash" in rules:
-                if "—" in content or "--" in content:
-                    failures.append("Brand avoids em-dashes (— or --), but they were found.")
-            if "semicolon" in rules and ";" in content:
-                failures.append("Brand avoids semicolons (;), but they were found.")
-            if "ellipses" in rules or "ellipsis" in rules:
-                if "..." in content or "…" in content:
-                    failures.append("Brand avoids ellipses (...), but they were found.")
-
-    # 2. Check Question Usage
-    question_match = re.search(r"QUESTION USAGE:\n(.*?)(?=\n[A-Z_]+:|\n#|\Z)", metrics, re.DOTALL | re.IGNORECASE)
-    if question_match:
-        rules = question_match.group(1).lower()
-        if ("avoid" in rules or "absent" in rules or "not use" in rules or "none" in rules) and "?" in content:
-            failures.append("Brand strictly avoids questions, but a question mark (?) was found.")
-            
-    return failures
+    if use_previous:
+        which = f"the best round the judge did score (round {state.get('best_iteration')})"
+    elif carried_findings:
+        which = ("this round's draft, which still fails these code checks: "
+                 + "; ".join(carried_findings)[:500])
+    else:
+        which = "this round's draft, which passed every code check (facts, placeholders, punctuation)"
+    return {
+        **state,
+        "content": delivered,
+        "approved": False,
+        "score": score,
+        "feedback": (
+            f"JUDGE UNAVAILABLE — the voice judge could not be reached ({reason}). "
+            f"Delivered {which}, but its voice was NOT scored in this round. "
+            "Review it before publishing, or generate again once the model provider is reachable."
+        ),
+        "flagged_passages": "No specific passages flagged.",
+        "violation_history": prior_violations + ["judge unavailable"],
+        "best_content": delivered,
+        "best_score": score,
+        "best_iteration": state.get("best_iteration") if use_previous else state.get("iteration"),
+        "best_was_clean": bool(state.get("best_was_clean")) if use_previous else not carried_findings,
+        "creative_angle": state.get("creative_angle", "unknown"),
+        "iteration": max_iterations,
+    }
 
 
 @observe("enforcer_node")
-def enforcer_node(state: GraphState, analyzer: BrandMetricsSQL, rag: BrandRAG = None) -> GraphState:
+def enforcer_node(state: GraphState) -> GraphState:
+    from graph.deps import resolve_deps
+    rag, analyzer, _memory = resolve_deps(state["business_id"], state["content_type"])
+
+    # Gates this draft has already been corrected for. The writer sees only
+    # the newest feedback, so without carrying this forward it fixes the latest
+    # violation and reintroduces one it had already resolved — the loop then
+    # oscillates instead of converging and runs out of iterations on a draft
+    # that was acceptable two rounds earlier.
+    prior_violations = list(state.get("violation_history") or [])
+
+    def gate_has_had_its_rounds(label: str) -> bool:
+        """Whether this gate has already led enough rounds on its own."""
+        return sum(1 for v in prior_violations if v.startswith(label)) >= GATE_ROUNDS_ALONE
+
+    def with_violation(label: str, detail: str = "") -> list[str]:
+        # The detail matters for a repeat offender. Social copy was told
+        # "extractive copying" at rounds one, three, five and six and reached for
+        # the same distinctive sentence every time; a bare gate name does not say
+        # which phrase to stop using, so the constraint could not be acted on.
+        entry = f"{label}: {detail}" if detail else label
+        return prior_violations if entry in prior_violations else prior_violations + [entry]
+
+    # How many rounds one deterministic gate may have to itself before the rest
+    # of the enforcer gets a turn.
+    #
+    # These gates return the moment they find something, which is right the
+    # first time: the finding is certain, the fix is specific, and a model call
+    # would be wasted. It is wrong the sixth time. A leaked line of pipeline
+    # boilerplate once entered the story-coverage check as a beat to dramatise,
+    # and because it could never be satisfied it led every round of a six-round
+    # run — so the voice pass, which is the only thing that would have noticed
+    # that the draft read "He needs cash. His wallet holds money.", was never
+    # invoked once in the entire generation.
+    #
+    # After this many rounds the finding is carried into the full evaluation
+    # instead of short-circuiting it. The draft still cannot be approved while
+    # it stands; the writer simply gets everything wrong with the draft in one
+    # round rather than one fault at a time.
+    GATE_ROUNDS_ALONE = 2
+
+    carried_findings: list[str] = []
+
     content        = state["content"]
     metrics        = analyzer.get_context()
     iteration      = state.get("iteration", 1)
-    max_iterations = 3
+    max_iterations = MAX_ITERATIONS
+
+    # -2. The writer's model failed mid-revision. "content" is the draft this
+    # node already judged last round, so judging it again would spend a model
+    # call to learn nothing. End the loop; the deployer delivers the best round.
+    if state.get("writer_unavailable"):
+        logger.warning("Writer unavailable at iteration %d (%s); ending the revision loop",
+                       iteration, state["writer_unavailable"])
+        note = (f"WRITER UNAVAILABLE — the writer's model failed during revision "
+                f"({state['writer_unavailable']}). Delivered the best draft this run "
+                "produced, which was not approved. Review it before publishing.\n\n")
+        return {
+            **state,
+            "approved": False,
+            "feedback": note + (state.get("feedback") or ""),
+            "iteration": max_iterations,
+        }
+
+    # -1. No Brand Brain, no verdict.
+    #
+    # Checked in code, ahead of everything else, for the same reason the
+    # hallucination and publishability verdicts are re-applied in code below:
+    # an APPROVAL RULE is not an enforcement mechanism. Asked to score a draft
+    # against an empty brand context, the model said so and returned 1.0 twice —
+    # and then, on the identical empty input, returned 8.8 and approved. The
+    # scoring model is the wrong place for a structural precondition, because
+    # its answer to one is a sample rather than a decision.
+    #
+    # Nothing below this line works without a brain either. The writer has
+    # already fallen through to its generic "first-person plural, be direct"
+    # fallback, so the draft is written in the system's default voice rather
+    # than the brand's; run_preflight_checks finds no PUNCTUATION HABITS and
+    # checks nothing; check_measured_mechanics finds no MEASURED MECHANICS and
+    # returns no failures; and find_unfilled_placeholders has no measured
+    # bracket rate, so it cannot tell a template slot from a house convention
+    # and stays quiet. Observed live: a trailer shipped at 8.8/10 containing a
+    # literal "[Movie Title]", written at 2.7x the brand's own four-syllable
+    # rate and with none of its contractions, because all four gates were off
+    # at once and the only thing still running was a model with nothing to
+    # compare against.
+    #
+    # This is not a content defect, so it is not sent back to the writer: no
+    # revision can supply a missing brain. The iteration counter is advanced to
+    # the ceiling so the graph routes straight to the deployer and the run ends
+    # with an honest score instead of spending two more rounds of LLM calls on
+    # a state the writer cannot change. It records approved=False and 0.0, which
+    # the max-iteration force-approval below cannot reach, because that only
+    # ever rescues a quality shortfall.
+    if not brand_brain_is_usable(metrics):
+        logger.error(
+            "NO BRAND BRAIN for business_id=%s content_type=%s — refusing to "
+            "score. The brand context is empty, so every deterministic gate is "
+            "inert and the draft was written from the writer's generic "
+            "fallback, not this brand's voice.",
+            state.get("business_id"), state.get("content_type"),
+        )
+        return {
+            **state,
+            "approved": False,
+            "score": 0.0,
+            "style_match": 0.0,
+            "tone_match": 0.0,
+            "structure_match": 0.0,
+            "signature_match": 0.0,
+            "feedback": (
+                "NO BRAND BRAIN — there is no voice profile for "
+                f"content type '{state.get('content_type')}', so this draft "
+                "cannot be scored against the brand and was not written from "
+                "it either. This is a setup problem, not a writing problem, and no "
+                "revision will fix it. Upload this brand's previously "
+                "successful content for THIS content type with doc_role=voice, "
+                "wait for extraction and synthesis to finish, then generate "
+                "again. A brain is built per (business, content type): "
+                "documents uploaded under a different content type do not "
+                "carry over."
+            ),
+            "flagged_passages": "No specific passages flagged.",
+            "violation_history": with_violation("no brand brain"),
+            "creative_angle": "unknown",
+            "iteration": max_iterations,
+        }
+
+    # 0. Deterministically fix simple banned punctuation before anything else
+    # looks at the content, rather than flagging it and hoping a revision
+    # round removes it (which fixes one excerpt but can reintroduce another
+    # elsewhere). Mutate `state` immediately so every return path below —
+    # preflight rejection, hallucination rejection, or full approval —
+    # carries the corrected text forward instead of the original.
+    content, punctuation_fixes = sanitize_banned_punctuation(content, metrics)
+    if punctuation_fixes:
+        logger.info(
+            "Auto-sanitized banned punctuation at iteration %d: %s",
+            iteration, punctuation_fixes,
+        )
+
+    # 0-1. Spelling, corrected to the variety the brand writes in, for the same
+    # reason: "colorful" in a British brand's copy has one right answer, and a
+    # revision round spent on it is a round not spent on the writing. A word
+    # the source capitalises is left alone, since it is probably a name.
+    from utils.brand_fixtures import respell, spelling_from
+
+    variety = spelling_from(metrics)
+    if variety:
+        names = re.findall(r"\b[A-Z][a-z]+\b", state.get("research", "") or "")
+        content, spelling_fixes = respell(content, variety, protected=names)
+        if spelling_fixes:
+            logger.info("Respelled to %s English at iteration %d: %s",
+                        variety, iteration, spelling_fixes)
+    state = {**state, "content": content}
+
+    # 0a. Scene headings, for narrative content only.
+    #
+    # The brand's scripts write "INT. WICK HOME - DAY" with an em dash. A draft
+    # came back with "INT. UNIVERSITY CAMPUS, DAY" and nothing objected, because
+    # nothing was reading headings at all. Which separator the brand uses is not
+    # a judgement call, so it is corrected here rather than sent back — the same
+    # argument as the punctuation fix above.
+    heading_findings = []
+    if is_narrative(state.get("content_type", "")):
+        from utils.documents import voice_documents
+        from utils.screenplay import heading_findings as _heading_findings
+        from utils.screenplay import sanitize_scene_headings
+
+        corpus = voice_documents(state["business_id"], state.get("content_type", ""))
+        if corpus:
+            content, heading_fixes = sanitize_scene_headings(content, corpus)
+            if heading_fixes:
+                logger.info("Scene headings normalised at iteration %d: %s", iteration, heading_fixes)
+                state = {**state, "content": content}
+        # A name the draft spells two ways. It introduced the character as EMK,
+        # wrote Emk three times after that, and the voice pass spent its only
+        # finding on it and approved the draft anyway — so it shipped both.
+        # Which capitals a name takes is not a judgement call either.
+        from utils.documents import reference_documents
+        from utils.screenplay import sanitize_character_names
+
+        product = reference_documents(state["business_id"], state.get("content_type", ""))
+        if product:
+            content, name_fixes = sanitize_character_names(content, product)
+            if name_fixes:
+                logger.info("Character names normalised at iteration %d: %s", iteration, name_fixes)
+                state = {**state, "content": content}
+
+        # Anything the lexicon could not decide. A diner is legitimately either
+        # prefix, so those are left alone rather than guessed at.
+        heading_findings = _heading_findings(content)
+        if heading_findings:
+            logger.info("Scene heading mismatches at iteration %d: %d", iteration, len(heading_findings))
+
+    # 0b. Same treatment for capitals the brand does not shout. Bouncing the
+    # draft did not work: social copy was corrected at round two for EXCLUSIVE,
+    # GRAND, NOT and UNIQUE, reached 7.9 by round five, then shouted PERCEPTION,
+    # NOT, UNIQUE and NOW at round six — a fresh set each time, with the
+    # constraint listed in front of it. The writer was not reintroducing the same
+    # violation, so telling it what it had already fixed could not help. Lower
+    # casing a word is mechanical, so it gets a mechanical fix.
+    #
+    # grounding_text is built below; the brand's own documents are what say which
+    # capitals are permitted, so this needs the same text.
+    _grounding_for_caps = "\n\n".join([metrics, state.get("research", "") or ""])
+    content, caps_fixes = sanitize_unbranded_emphasis_caps(content, _grounding_for_caps)
+    if caps_fixes:
+        logger.info(
+            "Auto-sanitized unbranded emphasis capitals at iteration %d: %s",
+            iteration, caps_fixes,
+        )
+        state = {**state, "content": content}
 
     # Build permitted claims whitelist from asset bank
-    permitted_claims = _extract_permitted_claims(metrics)
+    permitted_claims = extract_permitted_claims(metrics, state.get("content_type", ""))
 
-    # 1. Run Fast Pre-flight Checks (Bypass LLM if failed)
-    preflight_failures = _run_preflight_checks(content, metrics)
-    if preflight_failures:
-        logger.warning("Pre-flight checks failed at iteration %d: %s", iteration, preflight_failures)
-        feedback = "DETERMINISTIC ANTI-PATTERN DETECTED — The content violates strict mechanical rules:\n"
-        for failure in preflight_failures:
-            feedback += f"- {failure}\n"
-        feedback += "\nPlease fix these formatting errors. No further evaluation was performed."
-        
+    # 1a. Fabricated-attribution gate — a quote attributed to a named person
+    # who appears nowhere in this generation's actual source material (the
+    # brand brief or the Researcher's output) is a hallucination the numeric
+    # claims check below cannot see, since it isn't a statistic. Checked
+    # deterministically so it cannot be reasoned around the way an LLM-only
+    # check was on the very first version of this evaluator.
+    grounding_text = f"{metrics}\n\n{state.get('topic', '')}\n\n{state.get('research', '')}"
+    fabricated_attributions = find_unverified_quote_attributions(content, grounding_text)
+    if fabricated_attributions:
+        logger.warning(
+            "Fabricated quote attribution(s) at iteration %d: %s",
+            iteration, [f["who"] for f in fabricated_attributions],
+        )
+        feedback = (
+            "HALLUCINATION DETECTED — the content attributes a quote to a named "
+            "person who does not appear anywhere in the source material:\n"
+        )
+        flagged_lines = []
+        for f in fabricated_attributions:
+            feedback += f"  - \"{f['quote']}\" — attributed to \"{f['who']}\", who is not in any uploaded document or research result.\n"
+            flagged_lines.append(f"\"{f['quote']}\" — fabricated attribution to \"{f['who']}\"")
+        feedback += (
+            "\nRemove the invented name. Either attribute the statement to an unnamed "
+            "role already used in the brand's material (e.g. a title without a name), "
+            "or drop the quote and state the point as a general brand observation."
+        )
         return {
             **state,
             "approved": False,
@@ -197,38 +354,572 @@ def enforcer_node(state: GraphState, analyzer: BrandMetricsSQL, rag: BrandRAG = 
             "structure_match": 0.0,
             "signature_match": 0.0,
             "feedback": feedback,
-            "flagged_passages": "Multiple formatting violations.",
-            "creative_angle": "unknown"
+            "flagged_passages": "\n".join(flagged_lines),
+            "violation_history": with_violation("fabricated quote attribution"),
+            "creative_angle": "unknown",
         }
 
-    # The enforcer no longer uses raw RAG examples, relying strictly on synthesized rules.
-    result = LLMSingleton.get("enforcement").invoke(
-        ENFORCER_PROMPT.format(
-            metrics=metrics,
-            content=content,
-            permitted_claims=permitted_claims
+    # 1a-1. Fabricated contact details. Grouped with the attribution gate
+    # because it is the same class of failure — inventing a verifiable-looking
+    # real-world detail — and it must never ship, so it returns early rather
+    # than becoming a score deduction that max-iteration approval can wave past.
+    ungrounded_contacts = find_ungrounded_contact_details(content, grounding_text)
+    if ungrounded_contacts:
+        logger.warning(
+            "FABRICATED CONTACT DETAILS at iteration %d: %s",
+            iteration, [c["value"] for c in ungrounded_contacts],
         )
-    )
-
-    logger.info("ENFORCER_RAW_OUTPUT:\n%s", result.content[:2000])
-
-    try:
-        evaluation = _parse_llm_json(result.content)
-    except Exception:
-        logger.error("Failed to parse enforcer output, defaulting to NOT approved")
-        evaluation = {
-            "hallucination_check": {"verdict": "FAIL", "hallucinated_claims": ["Parse failure — content requires re-evaluation."]},
+        feedback = (
+            "FABRICATED CONTACT DETAILS — this draft invents contact information "
+            "that exists nowhere in the source material:\n"
+        )
+        flagged_lines = []
+        for c in ungrounded_contacts:
+            feedback += f"  - {c['message']}\n"
+            flagged_lines.append(f"\"{c['value']}\" — invented {c['kind']}")
+        feedback += (
+            "\nRemove every invented address, number and URL. If the brand's own "
+            "material shows how it directs enquiries (for example, naming a team "
+            "rather than an individual), follow that. If it does not, leave the "
+            "detail out entirely. Do not substitute a placeholder either."
+        )
+        return {
+            **state,
             "approved": False,
             "score": 0.0,
             "style_match": 0.0,
             "tone_match": 0.0,
             "structure_match": 0.0,
             "signature_match": 0.0,
-            "dimension_details": {},
-            "flagged_passages": [],
-            "feedback": "Enforcer evaluation failed — content requires re-evaluation.",
+            "feedback": feedback,
+            "flagged_passages": "\n".join(flagged_lines),
+            "violation_history": with_violation("fabricated contact details"),
+            "creative_angle": "unknown",
+        }
+
+    # 1a-1b. Altered-quotation gate. Same class again: a verifiable real-world
+    # detail changed. Inventing a quote is caught above; this catches the
+    # subtler version, where a real quote is restyled into the brand's voice
+    # while still sitting inside quotation marks and attributed to a real
+    # person. Observed in social copy, which turned a sound designer's "It
+    # isn't. It's loud, and it's close" into "It is not. It is loud. It is
+    # close." Returns early: a misquotation is a factual error about a named
+    # human being, not a style deduction to be waved past at max iterations.
+    altered_quotes = find_altered_quotations(content, grounding_text)
+    if altered_quotes:
+        logger.warning(
+            "ALTERED QUOTATION(S) at iteration %d: %s",
+            iteration, [q["quoted"][:60] for q in altered_quotes],
+        )
+        feedback = (
+            "ALTERED QUOTATION — this draft changes words inside quotation marks. "
+            "A quotation is a claim about what somebody actually said, so it is "
+            "reproduced exactly or not at all. Brand voice applies to your own "
+            "prose, never to the words of the people you are quoting:\n"
+        )
+        flagged_lines = []
+        for q in altered_quotes:
+            feedback += (
+                f"  - you wrote: \"{q['quoted']}\"\n"
+                f"    the source says: \"{q['source']}\"\n"
+            )
+            flagged_lines.append(
+                f"\"{q['quoted']}\" — altered quotation; the source says \"{q['source']}\""
+            )
+        feedback += (
+            "\nRestore the source wording exactly, including its contractions and "
+            "punctuation. If you want a shorter quote, cut it at a word boundary "
+            "and keep what remains verbatim. If you want the point in the brand's "
+            "own voice, take it out of quotation marks and out of the "
+            "attribution, and state it as the brand's own sentence."
+        )
+        return {
+            **state,
+            "approved": False,
+            "score": 0.0,
+            "style_match": 0.0,
+            "tone_match": 0.0,
+            "structure_match": 0.0,
+            "signature_match": 0.0,
+            "feedback": feedback,
+            "flagged_passages": "\n".join(flagged_lines),
+            "violation_history": with_violation("altered quotation"),
+            "creative_angle": "unknown",
+        }
+
+    # 1a-1d. Emphasis capitals the brand does not use. The measured all-caps
+    # rate cannot see this: a social draft that shouted EXCLUSIVE, FIRST,
+    # ACCLAIMED and UNIQUE measured 5.9 per 100 words against the brand's 4.4 —
+    # inside tolerance, and approved. The count was right and every choice was
+    # wrong. The brand's capitals are its title and its card lines, never an
+    # adjective it wants to lean on, so the question is which words rather than
+    # how many.
+    emphasis_caps = find_unbranded_emphasis_caps(content, grounding_text)
+    if emphasis_caps:
+        shouted = [c["word"] for c in emphasis_caps]
+        logger.warning(
+            "UNBRANDED EMPHASIS CAPITALS at iteration %d: %s", iteration, shouted,
+        )
+        feedback = (
+            "EMPHASIS CAPITALS THE BRAND DOES NOT USE — this draft sets words in "
+            "capitals mid-sentence that the brand never capitalises anywhere in its "
+            "own material:\n"
+        )
+        for word in shouted:
+            feedback += f"  - {word}\n"
+        feedback += (
+            "\nWrite them in normal case. The brand's capitals belong to its names and "
+            "headlines and to lines that stand on their own, not to adjectives you want to stress. "
+            "If a point needs emphasis, get it from what the sentence says."
+        )
+        return {
+            **state,
+            "approved": False,
+            "score": 0.0,
+            "style_match": 0.0,
+            "tone_match": 0.0,
+            "structure_match": 0.0,
+            "signature_match": 0.0,
+            "feedback": feedback,
+            "flagged_passages": "\n".join(
+                f"\"{w}\" — capitalised for emphasis; the brand does not do this" for w in shouted
+            ),
+            "violation_history": with_violation("unbranded emphasis capitals"),
+            "creative_angle": "unknown",
+        }
+
+    # 1a-2. Extractive-copying gate — the draft must be written FROM the
+    # research, not assembled OUT of it. Checked deterministically for the same
+    # reason as the punctuation rules: "do not reuse more than 8 consecutive
+    # words" is mechanical and unambiguous, so it deserves a guaranteed check
+    # rather than a probabilistic one. Compared against the research only, never
+    # against the brand brain — reusing the brand's signature constructions is
+    # the point of the product, reproducing its source documents is not.
+    research_text = state.get("research", "") or ""
+
+    # Facts with no second correct wording. A draft that writes about the same
+    # subject in vaguer terms has lost something no style rule can restore, and
+    # nothing else in this file would notice: the claim is not fabricated, not
+    # unattributed and not copied — it is simply gone.
+    fact_spans = extract_fact_spans(research_text)
+    dropped_facts = missing_fact_spans(content, fact_spans)
+    if dropped_facts:
+        listed = "\n".join(f'  - "{span}"' for span in dropped_facts)
+        logger.warning("FACT LOSS at iteration %d — %d span(s)", iteration, len(dropped_facts))
+        fact_feedback = (
+            "FACTS LOST — the draft writes about these things but no longer states them "
+            "accurately. Each of these appears in the source and must appear in the content "
+            "exactly as written:\n" + listed + "\n\nThese are not phrasing. A number without "
+            "its qualifier is a different claim, and a description that stands in for a "
+            "count ('a congregation', 'numerous individuals') is not the fact. Put each one "
+            "back in the brand's own sentence — do not rebuild the source's sentence "
+            "around it."
+        )
+    if dropped_facts and gate_has_had_its_rounds("state the source's facts exactly"):
+        carried_findings.append(fact_feedback)
+        prior_violations = with_violation(
+            "state the source's facts exactly",
+            "; ".join(f'"{span}"' for span in dropped_facts[:5]),
+        )
+    elif dropped_facts:
+        return {
+            **state,
+            "approved": False,
+            "score": 0.0,
+            "style_match": 0.0,
+            "tone_match": 0.0,
+            "structure_match": 0.0,
+            "signature_match": 0.0,
+            "feedback": fact_feedback,
+            "flagged_passages": "\n".join(f'"{span}" — fact dropped from the source' for span in dropped_facts),
+            "violation_history": with_violation(
+                "state the source's facts exactly",
+                "; ".join(f'"{span}"' for span in dropped_facts[:5]),
+            ),
+            "creative_angle": "unknown",
+        }
+
+    # Story the draft reached and then summarised away. Blocking for narrative
+    # work, where retelling the source IS the job: a script that replaced EMK
+    # asking about Kan's studies, the two-handed greetings and the phone number
+    # with "This encounter marks his initiation into a world of hidden power"
+    # passed every other check in this file. Nothing it wrote was false — it
+    # had simply stopped telling the story and started describing it.
+    #
+    # Advisory elsewhere. A blog uses a fraction of its research on purpose, and
+    # demanding coverage of all of it would be the tight-rule failure again.
+    if is_narrative(state.get("content_type", "")):
+        from utils.voice_spec import band_high
+
+        # Compared against the document, not against what retrieval returned
+        # from it. Chunks arrive without their headings, so the rule that skips
+        # a document's cast list and its title block has nothing to match, and
+        # both have been reported as story a draft failed to tell.
+        from utils.documents import reference_documents
+
+        story_source = reference_documents(state["business_id"], state.get("content_type", "")) or research_text
+        thin_beats = dropped_detail(
+            content, story_source,
+            abstraction_high=band_high(metrics, "nominalisations_per_100_words"),
+        )
+        if thin_beats:
+            logger.warning("DROPPED STORY at iteration %d — %d beat(s)", iteration, len(thin_beats))
+            lines = []
+            for beat in thin_beats:
+                how = "NOT TOLD AT ALL" if beat["skipped"] else "told without its detail"
+                lines.append(
+                    f'  - {how}: "{beat["beat"]}"\n'
+                    f'    missing from the draft: ' + ", ".join(beat["missing"][:8])
+                )
+            feedback = (
+                "STORY DROPPED — the draft covers these parts of the source and leaves out what "
+                "happens in them:\n"
+                + "\n".join(lines)
+                + "\n\nWrite what happens. A gesture, a question, a line of dialogue, an object "
+                  "changing hands — those are the story, and naming what they add up to is not a "
+                  "substitute for them. \"This marks the beginning of his entanglement\" is the "
+                  "summary of a scene, not the scene.\n"
+                  "Keep the source's facts in its own words where they have no second correct "
+                  "wording, and build your own sentences around them."
+            )
+            if gate_has_had_its_rounds("tell the story, do not summarise it"):
+                carried_findings.append(feedback)
+                prior_violations = with_violation(
+                    "tell the story, do not summarise it",
+                    "; ".join(f"missing: {', '.join(b['missing'][:4])}" for b in thin_beats[:3]),
+                )
+                thin_beats = []
+        if thin_beats:
+            return {
+                **state,
+                "approved": False,
+                "score": 0.0,
+                "style_match": 0.0,
+                "tone_match": 0.0,
+                "structure_match": 0.0,
+                "signature_match": 0.0,
+                "feedback": feedback,
+                "flagged_passages": "\n".join(
+                    f'"{beat["beat"][:90]}" — source beat left out of the draft' for beat in thin_beats
+                ),
+                "violation_history": with_violation(
+                    "tell the story, do not summarise it",
+                    "; ".join(f"missing: {', '.join(b['missing'][:4])}" for b in thin_beats[:3]),
+                ),
+                "creative_angle": "unknown",
+            }
+
+    # Which words are names is a property of the brand, so the evidence is
+    # every document this business has uploaded — not this content type's
+    # research, which for trailer copy contains the award names only in
+    # capitals and so shows nothing about them being names at all.
+    name_evidence = brand_name_evidence(state["business_id"]) + "\n\n" + grounding_text
+    from utils.enforcement.constants import NARRATIVE_VERBATIM_SPAN_WORDS
+
+    max_span = (NARRATIVE_VERBATIM_SPAN_WORDS if is_narrative(state.get("content_type", ""))
+                else MAX_VERBATIM_SPAN_WORDS)
+    extractive_spans = find_extractive_spans(
+        content, research_text, max_span=max_span, name_evidence=name_evidence,
+        # The spans the writer was ordered to reproduce exactly, a few hundred
+        # lines above. Without them this check refuses what that one demands.
+        must_keep=fact_spans,
+    )
+    if extractive_spans:
+        logger.warning(
+            "EXTRACTIVE COPYING at iteration %d — %d span(s), longest %d words",
+            iteration, len(extractive_spans), extractive_spans[0]["length"],
+        )
+        # A copied span that is a source quotation needs the opposite
+        # instruction from a copied span of prose. Reproducing somebody's words
+        # exactly is correct; doing it without quotation marks is what makes it
+        # a defect, and the remedy is punctuation.
+        #
+        # Told only to "keep the fact, discard the wording", the writer
+        # paraphrased the quotation into quotation marks — at which point the
+        # hallucination check rejected it for not matching the source, so the
+        # next round restored the wording and dropped the marks again. The
+        # press-release path spent all six rounds alternating between those two
+        # states and ended unapproved, because the one resolution that satisfies
+        # both gates was the thing this feedback forbade.
+        quoted_spans, prose_spans = [], []
+        for span in extractive_spans:
+            source_quote = source_quotation_for_span(span["text"], research_text)
+            (quoted_spans if source_quote else prose_spans).append((span, source_quote))
+
+        feedback = (
+            "EXTRACTIVE COPYING DETECTED — this draft reproduces its source material "
+            f"verbatim. Passages of more than {max_span} consecutive "
+            "words are copied from the research:\n"
+        )
+        flagged_lines = []
+
+        if quoted_spans:
+            feedback += (
+                "\nThese passages are QUOTATIONS from the source, reproduced without "
+                "quotation marks. Do NOT reword them — a quotation has to match what "
+                "the person said. Put each one back inside quotation marks and attribute "
+                "it to the speaker the source attributes it to, or remove it entirely:\n"
+            )
+            for span, source_quote in quoted_spans:
+                feedback += f"  - ({span['length']} words) \"{span['text']}\"\n"
+                feedback += f"    the source quotes this as: \"{source_quote}\"\n"
+                flagged_lines.append(
+                    f"\"{span['text']}\" — a source quotation reproduced without "
+                    f"quotation marks; restore the marks and the attribution"
+                )
+
+        if prose_spans:
+            feedback += (
+                "\nThese passages are the source's own prose, not anybody's quoted "
+                "words:\n"
+            )
+            for span, _ in prose_spans:
+                feedback += f"  - ({span['length']} words) \"{span['text']}\"\n"
+                flagged_lines.append(
+                    f"\"{span['text']}\" — {span['length']} consecutive words copied from source"
+                )
+            feedback += (
+                "\nRewrite each of those: keep the FACT, discard the source's wording and "
+                "sentence shape, and state it the way this brand would state it. Source "
+                "documents are briefing material, not copy to be pasted. If a passage is "
+                "internal planning detail (strategy notes, production logistics, positioning "
+                "rationale) rather than something the brand would publish, drop it entirely "
+                "instead of rephrasing it."
+            )
+            # "Discard the source's wording" read as an instruction to reword
+            # everything, numbers included, and a draft answered it by turning
+            # "more than seven men" into "a congregation" that "exceeds seven".
+            # The quantities are named here so the instruction above cannot be
+            # taken to cover them.
+            if fact_spans:
+                kept = ", ".join(f'"{span}"' for span in fact_spans[:8])
+                feedback += (
+                    "\n\nThese are facts, not wording, and they stay exactly as they are — "
+                    f"they are what is true: {kept}. Rewrite the sentences around them."
+                )
+        return {
+            **state,
+            "approved": False,
+            "score": 0.0,
+            "style_match": 0.0,
+            "tone_match": 0.0,
+            "structure_match": 0.0,
+            "signature_match": 0.0,
+            "feedback": feedback,
+            "flagged_passages": "\n".join(flagged_lines),
+            "violation_history": with_violation(
+                "do not reuse this wording from the source",
+                "; ".join(
+                    '"' + span["text"][:90] + '"' for span, _ in prose_spans
+                ) or None,
+            ),
+            "creative_angle": "unknown",
+        }
+
+    # 1b. Run Fast Pre-flight Checks (Bypass LLM if failed)
+    preflight_failures = run_preflight_checks(content, metrics)
+    if preflight_failures:
+        logger.warning(
+            "Pre-flight checks failed at iteration %d: %s",
+            iteration, [f["message"] for f in preflight_failures],
+        )
+        feedback = "DETERMINISTIC ANTI-PATTERN DETECTED — The content violates strict mechanical rules:\n"
+        flagged_lines = []
+        for failure in preflight_failures:
+            feedback += f"- {failure['message']}\n"
+            if failure["excerpt"]:
+                feedback += f"  Offending text: \"{failure['excerpt']}\"\n"
+                flagged_lines.append(f"\"{failure['excerpt']}\" — {failure['message']}")
+        feedback += "\nPlease fix these formatting errors. No further evaluation was performed."
+
+        return {
+            **state,
+            "approved": False,
+            "score": 0.0,
+            "style_match": 0.0,
+            "tone_match": 0.0,
+            "structure_match": 0.0,
+            "signature_match": 0.0,
+            "feedback": feedback,
+            "flagged_passages": "\n".join(flagged_lines) if flagged_lines else "Multiple formatting violations.",
+            "violation_history": with_violation("mechanical rule violation"),
             "creative_angle": "unknown"
         }
+
+    # A human reviewer's rejection note. When present it becomes a hard gate
+    # ahead of the brand-pattern scoring: the enforcer's job is no longer only
+    # "does this match the brand" but also "was the change the human asked for
+    # actually made".
+    human_feedback = (state.get("human_feedback") or "").strip()
+    human_directive = (
+        ENFORCER_HUMAN_DIRECTIVE.format(human_feedback=human_feedback)
+        if human_feedback else ""
+    )
+
+    # How this brand builds sentences, and where this draft sits outside its
+    # range — stated as habits, never as numbers to hit. The voice pass reads
+    # both and answers with rewrites of the draft's own sentences.
+    from utils.brand_profile import extract_section
+
+    from utils.voice_spec import brain_for_judge, for_judge
+
+    # Without the rhythm block: it is measured, checked in code and reported to
+    # the writer, and a judge shown the rules quoted them back as the reason for
+    # refusing four drafts in a row however plainly it had been told not to.
+    voice_spec = for_judge(extract_section(metrics, "VOICE SPEC")) or (
+        "No voice spec measured for this brand yet."
+    )
+
+    # The moves the brand makes, in its own Brain's words: how it opens, how it
+    # closes, the constructions it reaches for. This is what the voice pass is
+    # asked to judge against.
+    #
+    # It is given no rates, and that is the point. Handed the measured numbers,
+    # the judge faulted a draft against whichever one it had crossed: three
+    # rounds ordering a script to join its sentences, then one ordering every
+    # sentence onto its own line, each defensible against a different statistic.
+    # A number a draft can cross is a target to oscillate around, not a voice.
+    # The rates are still measured and still enforced where they are mechanical
+    # — punctuation, placeholders, capitals — and the voice pass never sees them.
+    craft = [
+        extract_section(metrics, name) for name in
+        ("OPENING PATTERN", "CLOSING PATTERN", "SIGNATURE CONSTRUCTIONS", "STRUCTURAL PATTERNS")
+    ]
+    from utils.brand_profile import strip_invented_counts
+
+    voice_craft = strip_invented_counts("\n\n".join(part for part in craft if part)) or (
+        "Nothing extracted yet — judge against the writing habits above."
+    )
+
+    # Subjects this draft has already been pulled up on. Closed for the rest of
+    # the run: the writer acted on them, and reopening one is how a loop spends
+    # six rounds arguing with itself instead of converging.
+    raised = [v.split(":", 1)[1].strip() for v in prior_violations if v.startswith("voice:")]
+    closed_subjects = ("\n".join(f"- {subject}" for subject in dict.fromkeys(raised))
+                       if raised else "- Nothing yet; this is the first voice pass on this draft.")
+
+    # The enforcer no longer uses raw RAG examples, relying strictly on synthesized rules.
+    try:
+        result = LLMSingleton.get("enforcement").invoke(
+            ENFORCER_PROMPT.format(
+                # Not `metrics`. The whole Brain here re-supplied the rhythm rules
+                # and the rates that every variable below was built to withhold.
+                metrics=brain_for_judge(metrics),
+                content=content,
+                topic=state.get("topic", "") or "No topic provided.",
+                research=state.get("research", "") or "No research/source material was provided for this generation.",
+                permitted_claims=permitted_claims,
+                human_directive=human_directive,
+                voice_spec=voice_spec,
+                voice_craft=voice_craft,
+                closed_subjects=closed_subjects,
+            )
+        )
+    except _provider_errors() as exc:
+        return _judge_unavailable(state, content, carried_findings, prior_violations,
+                                  max_iterations, exc)
+
+    logger.info("ENFORCER_RAW_OUTPUT:\n%s", result.content[:2000])
+
+    try:
+        evaluation = parse_llm_json(result.content)
+    except Exception:
+        # A single malformed response (truncated JSON, stray commentary) shouldn't
+        # tank an otherwise-passing draft with an automatic hallucination fail —
+        # ask the model to re-emit its own evaluation as clean JSON once before
+        # giving up and failing closed.
+        logger.warning("Failed to parse enforcer output — retrying once with a repair prompt")
+        try:
+            repair = LLMSingleton.get("enforcement").invoke(
+                "Your previous response could not be parsed as JSON. Re-emit your evaluation "
+                "as a single valid JSON object only — no markdown fences, no commentary, no "
+                "text before or after the braces. Here is what you previously returned:\n\n"
+                + result.content
+            )
+            evaluation = parse_llm_json(repair.content)
+            logger.info("Enforcer JSON repaired successfully on retry")
+        except Exception:
+            logger.error("Failed to parse enforcer output after retry, defaulting to NOT approved")
+            evaluation = {
+                "hallucination_check": {"verdict": "FAIL", "hallucinated_claims": ["Parse failure — content requires re-evaluation."]},
+                "approved": False,
+                "score": 0.0,
+                "style_match": 0.0,
+                "tone_match": 0.0,
+                "structure_match": 0.0,
+                "signature_match": 0.0,
+                "dimension_details": {},
+                "flagged_passages": [],
+                "feedback": "Enforcer evaluation failed - content requires re-evaluation.",
+                "creative_angle": "unknown"
+            }
+
+    # A syntactically valid JSON response can still omit keys. Normalise before
+    # the gates below index into it, so a partial response fails closed
+    # (not approved) rather than raising KeyError mid-pipeline.
+    evaluation.setdefault("approved", False)
+    evaluation.setdefault("score", 0.0)
+
+    # Hard gate: a reviewer directive that was not carried out overrides the
+    # brand-pattern scores. Enforced here in code rather than trusting the model
+    # to have honoured APPROVAL RULE 7 on its own — the same reason the
+    # hallucination verdict below is re-applied deterministically.
+    if human_feedback:
+        directive_verdict = str(evaluation.get("directive_compliance", "FAIL")).strip().upper()
+        if directive_verdict.startswith("FAIL"):
+            logger.warning(
+                "REVIEWER DIRECTIVE NOT MET at iteration %d — forcing rejection", iteration,
+            )
+            evaluation["approved"] = False
+            evaluation["score"] = min(float(evaluation.get("score", 0.0)), 5.0)
+            directive_feedback = (
+                "REVIEWER DIRECTIVE NOT MET — a human reviewer asked for a specific "
+                "change and this draft does not yet satisfy it:\n"
+                f"  {human_feedback}\n"
+                "Apply that change before anything else. It outranks the brand patterns.\n"
+            )
+            existing = evaluation.get("feedback", "")
+            evaluation["feedback"] = directive_feedback + (
+                f"\nADDITIONAL FEEDBACK:\n{existing}" if existing else ""
+            )
+        else:
+            logger.info("Reviewer directive satisfied at iteration %d", iteration)
+
+    # Hard gate: internal planning material must not reach published copy.
+    # Re-applied in code for the same reason as the other gates — the model
+    # returned approved:true alongside a directive_compliance FAIL once already,
+    # so an APPROVAL RULE is not by itself an enforcement mechanism.
+    publishability = str(evaluation.get("publishability", "PASS")).strip().upper()
+    if publishability.startswith("FAIL"):
+        logger.warning(
+            "PUBLISHABILITY FAIL at iteration %d — internal material in output", iteration,
+        )
+        evaluation["approved"] = False
+        evaluation["score"] = min(float(evaluation.get("score", 0.0)), 5.0)
+        publish_feedback = (
+            "INTERNAL MATERIAL IN PUBLISHED COPY — this draft restates something the "
+            "brand told itself rather than something it tells its audience. Marketing "
+            "directives, positioning rationale, audience targeting, test findings and "
+            "production logistics are context for writing, never content to publish.\n"
+            "DELETE the offending sentences outright. Do NOT reword them — rewording an "
+            "internal fact still discloses it, and that is why this draft failed after "
+            "previous attempts to soften the wording. Removing a sentence entirely is the "
+            "only fix. The piece is allowed to be shorter.\n"
+        )
+        # Name the exact sentences. A generic instruction to remove internal
+        # material has already been observed to fail across three revision
+        # rounds; the writer needs to be told precisely what to cut.
+        offending = evaluation.get("flagged_passages") or []
+        if isinstance(offending, list) and offending:
+            publish_feedback += "Delete these exactly:\n"
+            for passage in offending[:6]:
+                publish_feedback += f"  - {passage}\n"
+        elif isinstance(publishability, str) and len(publishability) > 8:
+            publish_feedback += f"Reported by the publishability check: {publishability}\n"
+        existing = evaluation.get("feedback", "")
+        evaluation["feedback"] = publish_feedback + (
+            f"\nADDITIONAL FEEDBACK:\n{existing}" if existing else ""
+        )
 
     # Hard gate: hallucination failure overrides score and approval
     hallucination = evaluation.get("hallucination_check", {})
@@ -248,23 +939,164 @@ def enforcer_node(state: GraphState, analyzer: BrandMetricsSQL, rag: BrandRAG = 
 
         # Build actionable feedback pointing to permitted alternatives
         hallucination_feedback = (
-            "HALLUCINATION DETECTED — content contains fabricated claims not in the brand's asset bank.\n"
+            "HALLUCINATION DETECTED — content states things the source does not.\n"
             "Fabricated claims found:\n"
         )
         for claim in hallucinated:
             hallucination_feedback += f"  - {claim}\n"
-        hallucination_feedback += (
-            "\nReplace all fabricated claims with permitted alternatives from the brand asset bank. "
-            "Use only exact client counts, percentages, and framework names from the permitted claims list. "
-            "If no suitable permitted claim exists for a numbered point, rewrite that point to use "
-            "a general brand observation without specific numbers."
-        )
+        # What to do about a fabricated claim depends on what is being written.
+        # A screenplay has no asset bank to replace claims from, and telling its
+        # writer to "use only exact client counts, percentages, and framework
+        # names" sends it looking for a list it was never given. What it has is
+        # the source: the men were seated and drinking, and the draft said they
+        # were standing.
+        if is_narrative(state.get("content_type", "")):
+            hallucination_feedback += (
+                "\nEach of these contradicts the source material or invents something that is not in it. "
+                "Go back to the source, find what actually happens at that point in the story, and write "
+                "that instead. Do not soften the claim or remove it — replace it with what is true. "
+                "Names, act titles and scene headings you wrote yourself are not claims and are not the "
+                "problem here."
+            )
+        else:
+            hallucination_feedback += (
+                "\nReplace all fabricated claims with permitted alternatives from the brand asset bank. "
+                "Use only exact client counts, percentages, and framework names from the permitted claims list. "
+                "If no suitable permitted claim exists for a numbered point, rewrite that point to use "
+                "a general brand observation without specific numbers."
+            )
         # Prepend hallucination feedback — it is the priority fix
         existing_feedback = evaluation.get("feedback", "")
         evaluation["feedback"] = hallucination_feedback + (
             f"\n\nADDITIONAL FEEDBACK:\n{existing_feedback}" if existing_feedback else ""
         )
         
+
+    # Voice gate. Separate from the checks above on purpose: those decide
+    # whether the draft is true and publishable, this decides whether it sounds
+    # like the brand. A draft can pass every factual gate and still read as
+    # "He demonstrates profound deference" where the brand writes "He bows".
+    MIN_VOICE_SCORE = 6.0
+    try:
+        voice_score = float(evaluation.get("voice_score", 0.0) or 0.0)
+    except (TypeError, ValueError):
+        voice_score = 0.0
+    rewrites = evaluation.get("voice_rewrites") or []
+    if isinstance(rewrites, list) and rewrites:
+        # A suggestion the rest of the enforcer will refuse is worse than no
+        # suggestion. Asked for a line in the brand's voice, the voice pass
+        # offered "This marks the beginning of his entanglement" — the source's
+        # own commentary, and the sentence its own prompt names as an example of
+        # a genuine failure. The writer used it, the told-not-shown check
+        # flagged it two rounds later, and the run went to its cap without
+        # approving anything.
+        #
+        # Narrative only, like the check it defers to: a proposal explains what
+        # things mean for a living.
+        from utils.coverage import narrator_explanations
+
+        usable = []
+        for item in rewrites:
+            if not (isinstance(item, dict) and item.get("from") and item.get("to")):
+                continue
+            if is_narrative(state.get("content_type", "")) and narrator_explanations(item["to"]):
+                logger.info(
+                    "Dropped a voice rewrite that states what something meant: %r", item["to"],
+                )
+                continue
+            usable.append(item)
+
+        lines = []
+        for item in usable[:5]:
+            lines.append(f'  - as written: "{item["from"]}"\n    in the brand\'s voice: "{item["to"]}"')
+        if lines and voice_score < MIN_VOICE_SCORE:
+            evaluation["feedback"] = (
+                "VOICE — these sentences do not sound like the brand. Rewrite them along these lines, keeping "
+                "every fact:\n" + "\n".join(lines)
+                + "\n\nThis is about word choice and sentence shape, not length. Never swap a plain word for a "
+                  "longer one, and never drop a fact to shorten a sentence.\n\n"
+                + (evaluation.get("feedback") or "")
+            ).strip()
+    subject = str(evaluation.get("voice_subject") or "").strip()
+    if subject and voice_score and voice_score < MIN_VOICE_SCORE:
+        prior_violations = with_violation("voice", subject)
+
+    if voice_score and voice_score < MIN_VOICE_SCORE:
+        evaluation["approved"] = False
+        evaluation["score"] = min(float(evaluation.get("score", 0.0) or 0.0), 6.5)
+        logger.info("Voice score %.1f below %.1f — draft does not sound like the brand", voice_score, MIN_VOICE_SCORE)
+
+    # Rhythm, measured rather than judged. It reaches the writer as feedback and
+    # never reaches the voice pass, which has no instrument for it.
+    from utils.voice_spec import flatness_note
+
+    flat = flatness_note(content, metrics)
+    if flat and not evaluation.get("approved"):
+        evaluation["feedback"] = ((evaluation.get("feedback") or "").rstrip()
+                                  + "\n\nRHYTHM — " + flat).strip()
+
+    # Sentences where the narrator says what something meant. Narrative only:
+    # a proposal explains for a living, and a scene does not.
+    if is_narrative(state.get("content_type", "")) and not evaluation.get("approved"):
+        from utils.coverage import narrator_explanations
+
+        explained = narrator_explanations(content)
+        if explained:
+            listed = "\n".join(f"  - {f['sentence']}" for f in explained)
+            evaluation["feedback"] = (
+                (evaluation.get("feedback") or "").rstrip()
+                + "\n\nTOLD, NOT SHOWN — these sentences state what something meant. Show the thing "
+                  "and let the reader take the meaning; where a character takes it, let them:\n"
+                + listed
+            ).strip()
+
+    # Scenes the source does not account for. Every other check asks whether
+    # the source reached the draft; this asks whether the draft stayed inside
+    # the source. A run that had told the whole treatment by its first act went
+    # on to write two more, in which Kan sits alone remembering faces — and the
+    # story gate was satisfied, because every beat it knew about had been told.
+    if is_narrative(state.get("content_type", "")) and not evaluation.get("approved"):
+        from utils.coverage import unsupported_scenes
+        from utils.documents import reference_documents
+
+        invented = unsupported_scenes(
+            content,
+            reference_documents(state["business_id"], state.get("content_type", "")) or research_text,
+        )
+        if invented:
+            listed = "\n".join(f"  - {f['heading']}" for f in invented)
+            evaluation["feedback"] = (
+                (evaluation.get("feedback") or "").rstrip()
+                + "\n\nSCENES THE SOURCE DOES NOT ACCOUNT FOR — each of these tells nothing the "
+                  "draft has not already told. If the source has run out, the piece ends; do not "
+                  "write on past it. Delete these or replace them with something that happens:\n"
+                + listed
+            ).strip()
+
+    # Anything the sanitiser left. It rides along with whatever else is going
+    # back rather than refusing the draft on its own — a heading it could not
+    # decide is a heading a person should look at, not a reason to spend a round.
+    if heading_findings and not evaluation.get("approved"):
+        listed = "\n".join(f"  - {f['message']}" for f in heading_findings[:5])
+        evaluation["feedback"] = (
+            (evaluation.get("feedback") or "").rstrip()
+            + "\n\nSCENE HEADINGS — check these against where the scene actually happens:\n"
+            + listed
+        ).strip()
+
+    # A deterministic finding that has already had its rounds alone. It still
+    # refuses the draft — nothing here is softened — but it now travels with
+    # everything else the enforcer found, so one revision can address the lot.
+    if carried_findings:
+        evaluation["approved"] = False
+        evaluation["score"] = min(float(evaluation.get("score", 0.0) or 0.0), 5.0)
+        evaluation["feedback"] = "\n\n".join(
+            carried_findings + [evaluation.get("feedback") or ""]
+        ).strip()
+        logger.info(
+            "Carried %d deterministic finding(s) into the full evaluation at iteration %d",
+            len(carried_findings), iteration,
+        )
 
     # Score gate: force revision if below threshold and iterations remain
     MIN_SCORE = 8.0
@@ -282,17 +1114,59 @@ def enforcer_node(state: GraphState, analyzer: BrandMetricsSQL, rag: BrandRAG = 
                 "and weaving in signature constructions naturally."
             )
 
-    # Hard cap: approve at max iterations only if no hallucinations
+    # Hard cap: at max iterations, force approval ONLY for quality shortfalls.
+    # A merely low brand-match score is a "good enough, ship it" call. These
+    # three are not — they are reasons the content must not be published at all,
+    # and running out of revision attempts does not make them acceptable.
+    # (Observed: a draft that failed the publishability gate at iteration 3 was
+    # capped to 5.0 by that gate and then force-approved anyway, shipping the
+    # internal material the gate had just caught.)
+    blocking = []
+    if hallucination_verdict == "FAIL":
+        blocking.append("fabricated claims")
+    if publishability.startswith("FAIL"):
+        blocking.append("internal material in published copy")
+    if human_feedback and str(
+        evaluation.get("directive_compliance", "FAIL")
+    ).strip().upper().startswith("FAIL"):
+        blocking.append("reviewer directive not met")
+    if carried_findings:
+        # Carrying a deterministic finding into the evaluation changes when the
+        # writer hears about it, never whether it counts. Left out of this list,
+        # a draft that had lost one of its source's facts would be force-
+        # approved at the last iteration as a mere quality shortfall.
+        blocking.append("facts or story missing from the source")
+
     if not evaluation["approved"] and iteration >= max_iterations:
-        if hallucination_verdict == "FAIL":
+        if blocking:
             logger.error(
-                "Max iterations reached but hallucinations still present — NOT approving. "
-                "Content contains fabricated claims and cannot be deployed."
+                "Max iterations reached but blocking issues remain (%s) — NOT approving. "
+                "This content requires a human rewrite before it can be deployed.",
+                "; ".join(blocking),
             )
-            # Do not force approve — hallucinated content must not be deployed
+            # Do not force approve — these must never ship unreviewed
         else:
-            logger.warning("Max iterations reached (no hallucinations), forcing approval")
+            logger.warning("Max iterations reached (quality only), forcing approval")
             evaluation["approved"] = True
+
+    # Remember this draft if it is the best the run has produced.
+    #
+    # "Best" prefers a draft that cleared every deterministic gate over one that
+    # merely scored well, because those gates catch things a score cannot see: a
+    # run whose last round lost "more than seven men" would otherwise have its
+    # highest-scoring draft chosen while that draft still carried the same lost
+    # fact. Among equals, the higher score wins; among those, the later round,
+    # since it has had more feedback.
+    clean = not carried_findings and hallucination_verdict != "FAIL" and not publishability.startswith("FAIL")
+    best_content = state.get("best_content")
+    best_score = float(state.get("best_score") or 0.0)
+    best_was_clean = bool(state.get("best_was_clean"))
+    score_now = float(evaluation.get("score", 0.0) or 0.0)
+    if best_content is None or (clean, score_now) >= (best_was_clean, best_score):
+        best_content, best_score, best_was_clean = content, score_now, clean
+        best_iteration = iteration
+    else:
+        best_iteration = state.get("best_iteration")
 
     logger.info(
         "Enforcer: hallucination=%s approved=%s score=%.1f style=%.1f tone=%.1f structure=%.1f signature=%.1f iteration=%d",
@@ -323,5 +1197,10 @@ def enforcer_node(state: GraphState, analyzer: BrandMetricsSQL, rag: BrandRAG = 
         "signature_match": evaluation.get("signature_match", 0.0),
         "feedback":        evaluation.get("feedback", ""),
         "flagged_passages": flagged_str,
+        "violation_history": prior_violations,
+        "best_content":    best_content,
+        "best_score":      best_score,
+        "best_iteration":  best_iteration,
+        "best_was_clean":  best_was_clean,
         "creative_angle":  evaluation.get("creative_angle", "unknown")
     }

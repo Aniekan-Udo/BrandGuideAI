@@ -25,3 +25,49 @@ Content Type: {content_type}
 
 Search Results:
 {results}"""
+
+# Applied to RAG output before the writer sees it, when the brand has reference
+# documents (product docs, press kits, briefs) indexed for this content type.
+#
+# Those documents legitimately mix two kinds of material, and the writer has
+# repeatedly proved unable to un-see the wrong kind: told plainly not to publish
+# internal strategy, it kept restating it in reworded form across three revision
+# rounds. Removing the material before it ever reaches the writer is far more
+# reliable than asking the writer to look at it and not use it.
+PUBLISHABLE_FACTS_FILTER = """You are preparing source material for a brand copywriter.
+
+Below is raw source material retrieved from the brand's own documents. Documents
+like these mix two very different kinds of information:
+
+  PUBLISHABLE — what the brand tells the world:
+    what the product, service or offer is, what it does, who it is for,
+    who is involved, when it is available, what it costs where stated,
+    its features, benefits, results and the problem it solves.
+
+  INTERNAL — what the brand tells itself:
+    marketing instructions and directives ("do not oversell X", "avoid
+    comparisons to Y"), positioning rationale, audience targeting and
+    demographic decisions, audience testing or research findings, budget,
+    scheduling and production logistics, competitive strategy, and any
+    note written to the team about how to sell the thing.
+
+Rewrite the source material as a clean brief containing ONLY the publishable
+facts. Rules:
+
+1. Keep every publishable fact, with its specifics intact — names, numbers,
+   dates, prices, specifications, features, locations, results.
+2. Remove internal material completely. Do not summarize it, soften it, or
+   carry it over in different words. If a sentence exists to tell the marketing
+   team what to do, it does not belong in the output at all.
+3. Do not add anything. No framing, no interpretation, no invented detail.
+4. Keep it plain. This is a fact sheet for a writer, not finished copy — the
+   writer supplies the voice.
+5. If a fact is genuinely ambiguous, keep it. Losing a usable fact is worse
+   than keeping a borderline one.
+
+Return only the cleaned brief. No preamble, no commentary, no headings about
+what you removed.
+
+SOURCE MATERIAL:
+{source_material}
+"""

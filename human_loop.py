@@ -5,12 +5,24 @@ from database import get_db_session, ReviewerLearning
 
 logger = logging.getLogger(__name__)
 
+# Ceiling on reject -> regenerate hops for a single piece of content. The
+# writer/enforcer loop inside the graph is already bounded at 3; without this
+# the outer human loop was unbounded, so a reviewer who kept rejecting would
+# keep spawning generations forever.
+MAX_REGENERATION_DEPTH = 3
 
-def promote_to_brand_metrics(generation_id: str) -> None:
+
+def handle_review_outcome(generation_id: str) -> None:
     """
     Called by process_feedback after human feedback is saved.
     - Approved: no action needed — generation already saved to DB
-    - Rejected: re-trigger full generation with human feedback
+    - Rejected: re-trigger full generation with human feedback injected,
+      preserving the original research mode and bounding the loop depth
+
+    Named promote_to_brand_metrics until it was noticed that it has never
+    promoted anything to brand_metrics. Nothing writes a generation into the
+    Brand Brain any more, and a name claiming otherwise invites someone to go
+    looking for a path that should not exist.
     """
     from celery_task import generate_content
 
@@ -22,27 +34,74 @@ def promote_to_brand_metrics(generation_id: str) -> None:
             ).first()
 
             if not record:
-                logger.warning("No feedback found for generation_id=%s", generation_id)
+                # Reported as "I rejected it and nothing happened". Whether the
+                # feedback never arrived or arrived and was not recorded, this
+                # is the line that distinguishes them, so it says which.
+                logger.warning(
+                    "REVIEW NOT ACTIONED generation_id=%s — no reviewer_learning row carries "
+                    "human feedback for it, so nothing was rejected and no rewrite was queued",
+                    generation_id,
+                )
                 return
 
             if record.human_approved:
-                logger.info("Generation %s approved — no re-trigger needed", generation_id)
+                # The approve box is ticked by default, so a reviewer who
+                # writes a correction and submits without unticking it has
+                # approved the draft. Logged at info with the score, because
+                # from the outside it looks identical to being ignored.
+                logger.info(
+                    "Generation %s was APPROVED (score=%s) — no rewrite queued. A rewrite is "
+                    "only triggered by a rejection.", generation_id, record.human_score,
+                )
                 return
 
-            # Rejected — re-trigger with human feedback injected
-            generate_content.delay(
-                generation_id=str(uuid.uuid4()),
-                business_id=record.business_id,
-                content_type=record.content_type,
-                topic=record.topic,
-                format_type=record.format_type,
-                user_id=record.user_id,
-                use_search=True,
-                human_feedback=record.human_feedback,
+            # Read every attribute needed after the session closes, while the
+            # instance is still attached.
+            next_depth = (record.regeneration_depth or 0) + 1
+            business_id = record.business_id
+            content_type = record.content_type
+            topic = record.topic
+            format_type = record.format_type
+            user_id = record.user_id
+            human_feedback = record.human_feedback
+            use_search = bool(record.use_search)
+
+        if next_depth > MAX_REGENERATION_DEPTH:
+            logger.warning(
+                "Regeneration cap reached for generation_id=%s (depth=%d, max=%d) — "
+                "not re-triggering. This content needs a human rewrite or a new brief.",
+                generation_id, next_depth, MAX_REGENERATION_DEPTH,
             )
-            logger.info("Re-generation triggered from rejected generation_id=%s", generation_id)
+            return
+
+        # Rejected — re-trigger with human feedback injected. use_search comes
+        # from the original request rather than being hardcoded, so a draft that
+        # was grounded in uploaded documents is not silently switched to web
+        # search (or vice versa) just because a human asked for an edit.
+        generate_content.delay(
+            generation_id=str(uuid.uuid4()),
+            business_id=business_id,
+            content_type=content_type,
+            topic=topic,
+            format_type=format_type,
+            user_id=user_id,
+            use_search=use_search,
+            # Passed explicitly because generate_content defaults research_mode
+            # to "both", and the researcher only falls back to use_search when
+            # research_mode is absent. So use_search was read from the record,
+            # handed over, and then overruled by the default — a piece grounded
+            # in the brand's own documents was rewritten with web search on,
+            # which is the exact switch the comment above says it avoids. The
+            # two values stated here are the researcher's own fallback.
+            research_mode="both" if use_search else "rag",
+            human_feedback=human_feedback,
+            regeneration_depth=next_depth,
+            parent_generation_id=generation_id,
+        )
+        logger.info(
+            "Re-generation triggered from rejected generation_id=%s (depth=%d, use_search=%s)",
+            generation_id, next_depth, use_search,
+        )
 
     except SQLAlchemyError as e:
-        logger.error("DB error in promote_to_brand_metrics generation_id=%s: %s", generation_id, e)
-
-
+        logger.error("DB error in handle_review_outcome generation_id=%s: %s", generation_id, e)
